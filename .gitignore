@@ -1,2 +1,4 @@
 .gren
 *.sh
+app
+*.js
