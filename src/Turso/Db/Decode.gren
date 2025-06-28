@@ -1,0 +1,538 @@
+module Turso.Db.Decode exposing
+    ( Decoder
+    , bool, float, int, posix, string, maybe
+    , map, map2, map3, map4, map5, map6, map7, map8
+    , succeed, fail, andThen
+    , unwrap
+    )
+
+{-| Decode results of SQL queries into Gren values.
+
+These are typically used in the `Db.get*` functions via the `decoder` field,
+where the string value matches the name of the field in the query. For example:
+
+    Turso.Db.getOne connection
+        { query = "SELECT * FROM users WHERE id = :id"
+        , parameters = 
+            [ Turso.Db.Encode.int 12345
+            ]
+        , decoder = 
+            Db.Decode.map2
+                (\id name -> 
+                    { id = id
+                    , name = name 
+                    }
+                )
+                (Db.Decode.int "id")
+                (Db.Decode.string "name")
+        }
+
+@docs Decoder
+
+## Decoding Fields
+
+Use these functions to decode individual fields in a row. You can combine multiple 
+fields to construct Gren records (or other values) with the `mapN` functions.
+
+@docs string, int, float, bool, posix, maybe
+
+## Mapping
+
+To combine multiple fields to construct Gren values like records, you can use 
+the the `mapN` functions.
+
+@docs map, map2, map3, map4, map5, map6, map7, map8
+
+## Fancy Decoding
+
+Build more complex decoders with these functions.
+
+@docs succeed, fail, andThen
+
+## Internals
+
+@docs unwrap
+-}
+
+import Json.Decode
+import Json.Encode
+import Time
+
+
+{-| A decoder for a database row.
+-}
+type Decoder a
+    = Decoder (Json.Decode.Decoder a)
+    | FieldDecoder { name : String, decoder : Json.Decode.Decoder a }
+
+
+{-| Result of a failed attempt to decode.
+-}
+type Error
+    = Error
+
+
+-- FIELDS
+
+
+{-| Decode a boolean field.
+
+    Turso.Db.Decode.bool "is_active"
+
+Booleans in SQLite can be stored as integers with 1 and 0 as True and False,
+or as a string with value "TRUE" or "FALSE". All other values will fail decoding.
+See <https://www.sqlite.org/datatype3.html#boolean_datatype>
+-}
+bool : String -> Decoder Bool
+bool name =
+    FieldDecoder
+        { name = name
+        , decoder =
+            Json.Decode.oneOf
+                [ Json.Decode.int
+                    |> Json.Decode.andThen
+                        (\i ->
+                            when i is
+                                0 -> Json.Decode.succeed False
+                                1 -> Json.Decode.succeed True
+                                _ -> Json.Decode.fail "Got unexpected integer in boolean field"
+                        )
+                , Json.Decode.string
+                    |> Json.Decode.andThen
+                        (\s ->
+                            when s is
+                                "TRUE" -> Json.Decode.succeed True
+                                "FALSE" -> Json.Decode.succeed False
+                                _ -> Json.Decode.fail "Got unexpected string in boolean field"
+                        )
+                ]
+        }
+
+
+{-| Decode an integer field.
+
+    Turso.Db.Decode.int "count"
+-}
+int : String -> Decoder Int
+int name =
+    FieldDecoder
+        { name = name
+        , decoder = Json.Decode.int
+        }
+
+
+{-| Decode a float field.
+
+    Turso.Db.Decode.float "cost"
+-}
+float : String -> Decoder Float
+float name =
+    FieldDecoder
+        { name = name
+        , decoder = Json.Decode.float
+        }
+
+
+{-| Decode an integer field into a Time.Posix value.
+
+    Turso.Db.Decode.posixe "created_at"
+
+The integer in the database should represent unix time in milliseconds
+(the number of milliseconds since 1970 January 1 at 00:00:00 UTC).
+This is how a `Time.Posix` value will be saved when using 
+[Turso.Db.Encode.posix](Turso.Db.Encode#posix).
+-}
+posix : String -> Decoder Time.Posix
+posix name =
+    FieldDecoder
+        { name = name
+        , decoder =
+            Json.Decode.map
+                Time.millisToPosix
+                Json.Decode.int
+        }
+
+
+{-| Decode a string field.
+
+    Turso.Db.Decode.string "name"
+-}
+string : String -> Decoder String
+string name =
+    FieldDecoder
+        { name = name
+        , decoder = Json.Decode.string
+        }
+
+
+{-| Decode a nullable field in the database.
+
+The first parameter is the decoder function for the field type if the value is not null.
+For example, to decode a nullable INTEGER field:
+
+    Turso.Db.Decode.maybe Turso.Db.Decode.int "myField"
+-}
+maybe : (String -> Decoder a) -> String -> Decoder (Maybe a)
+maybe toDecoder fieldName =
+    when toDecoder fieldName is
+        Decoder decoder ->
+            Decoder <|
+                Json.Decode.nullable decoder
+
+        FieldDecoder { name, decoder } ->
+            FieldDecoder
+                { name = name
+                , decoder =
+                    Json.Decode.nullable decoder
+                }
+
+
+
+-- ROWS
+
+
+{-| Transform a single decoded value into another value. For example:
+
+    Turso.Db.Decode.string "email"
+        |> Turso.Db.Decode.map Email.fromString
+-}
+map : (a -> b) -> Decoder a -> Decoder b
+map mapper decoder_ =
+    when decoder_ is
+        Decoder decoder ->
+            Decoder <|
+                Json.Decode.map mapper decoder
+
+        FieldDecoder { name, decoder } ->
+            FieldDecoder
+                { name = name
+                , decoder =
+                    Json.Decode.map mapper decoder
+                }
+
+
+{-| Transform two decoded values into another value. For example:
+
+    Turso.Db.Decode.map2
+        (\email password ->
+            { email = email
+            , password = password
+            }
+        )
+        (Turso.Db.Decode.string "email")
+        (Turso.Db.Decode.string "password")
+-}
+map2 : 
+    (a -> b -> c) -> 
+    Decoder a -> 
+    Decoder b -> 
+    Decoder c
+map2 func decoderA decoderB =
+    decoderA
+        |> andThen
+            (\a ->
+                decoderB
+                    |> andThen
+                        (\b ->
+                            succeed <|
+                                func a b
+                        )
+            )
+
+
+{-| Transform three decoded values into another value.
+-}
+map3 : 
+    (a -> b -> c -> d) -> 
+    Decoder a -> 
+    Decoder b -> 
+    Decoder c -> 
+    Decoder d
+map3 func decoderA decoderB decoderC =
+    decoderA
+        |> andThen
+            (\a ->
+                decoderB
+                    |> andThen
+                        (\b ->
+                            decoderC
+                                |> andThen
+                                    (\c ->
+                                        succeed <|
+                                            func a b c
+                                    )
+                        )
+            )
+
+
+{-| Transform four decoded values into another value.
+-}
+map4 : 
+    (a -> b -> c -> d -> e) -> 
+    Decoder a -> 
+    Decoder b -> 
+    Decoder c -> 
+    Decoder d ->
+    Decoder e
+map4 func decoderA decoderB decoderC decoderD =
+    decoderA
+        |> andThen
+            (\a ->
+                decoderB
+                    |> andThen
+                        (\b ->
+                            decoderC
+                                |> andThen
+                                    (\c ->
+                                        decoderD
+                                            |> andThen
+                                                (\d ->
+                                                    succeed <|
+                                                        func a b c d
+                                                )
+                                    )
+                        )
+            )
+
+
+{-| Transform five decoded values into another value.
+-}
+map5 : 
+    (a -> b -> c -> d -> e -> f) -> 
+    Decoder a -> 
+    Decoder b -> 
+    Decoder c -> 
+    Decoder d -> 
+    Decoder e -> 
+    Decoder f
+map5 func decoderA decoderB decoderC decoderD decoderE  =
+    decoderA
+        |> andThen
+            (\a ->
+                decoderB
+                    |> andThen
+                        (\b ->
+                            decoderC
+                                |> andThen
+                                    (\c ->
+                                        decoderD
+                                            |> andThen
+                                                (\d ->
+                                                    decoderE
+                                                        |> andThen
+                                                            (\e ->
+                                                                succeed <|
+                                                                    func a b c d e
+                                                            )
+                                                )
+                                    )
+                        )
+            )
+
+
+{-| Transform six decoded values into another value.
+-}
+map6 : 
+    (a -> b -> c -> d -> e -> f -> g) -> 
+    Decoder a -> 
+    Decoder b -> 
+    Decoder c -> 
+    Decoder d -> 
+    Decoder e -> 
+    Decoder f -> 
+    Decoder g
+map6 func decoderA decoderB decoderC decoderD decoderE decoderF =
+    decoderA
+        |> andThen
+            (\a ->
+                decoderB
+                    |> andThen
+                        (\b ->
+                            decoderC
+                                |> andThen
+                                    (\c ->
+                                        decoderD
+                                            |> andThen
+                                                (\d ->
+                                                    decoderE
+                                                        |> andThen
+                                                            (\e ->
+                                                                decoderF
+                                                                    |> andThen
+                                                                        (\f ->
+                                                                            succeed <|
+                                                                                func a b c d e f
+                                                                        )
+                                                            )
+                                                )
+                                    )
+                        )
+            )
+
+
+{-| Transform seven decoded values into another value.
+-}
+map7 : 
+    (a -> b -> c -> d -> e -> f -> g -> h) -> 
+    Decoder a -> 
+    Decoder b -> 
+    Decoder c -> 
+    Decoder d -> 
+    Decoder e -> 
+    Decoder f -> 
+    Decoder g ->
+    Decoder h
+map7 func decoderA decoderB decoderC decoderD decoderE decoderF decoderG =
+    decoderA
+        |> andThen
+            (\a ->
+                decoderB
+                    |> andThen
+                        (\b ->
+                            decoderC
+                                |> andThen
+                                    (\c ->
+                                        decoderD
+                                            |> andThen
+                                                (\d ->
+                                                    decoderE
+                                                        |> andThen
+                                                            (\e ->
+                                                                decoderF
+                                                                    |> andThen
+                                                                        (\f ->
+                                                                            decoderG
+                                                                                |> andThen
+                                                                                    (\g ->
+                                                                                        succeed <|
+                                                                                            func a b c d e f g
+                                                                                    )
+                                                                        )
+                                                            )
+                                                )
+                                    )
+                        )
+            )
+
+
+{-| Transform eight decoded values into another value.
+
+If you need more than 8, you can tack on more with [`andThen`](#andThen).
+-}
+map8 : 
+    (a -> b -> c -> d -> e -> f -> g -> h -> i) -> 
+    Decoder a -> 
+    Decoder b -> 
+    Decoder c -> 
+    Decoder d -> 
+    Decoder e -> 
+    Decoder f -> 
+    Decoder g -> 
+    Decoder h -> 
+    Decoder i
+map8 func decoderA decoderB decoderC decoderD decoderE decoderF decoderG decoderH =
+    decoderA
+        |> andThen
+            (\a ->
+                decoderB
+                    |> andThen
+                        (\b ->
+                            decoderC
+                                |> andThen
+                                    (\c ->
+                                        decoderD
+                                            |> andThen
+                                                (\d ->
+                                                    decoderE
+                                                        |> andThen
+                                                            (\e ->
+                                                                decoderF
+                                                                    |> andThen
+                                                                        (\f ->
+                                                                            decoderG
+                                                                                |> andThen
+                                                                                    (\g ->
+                                                                                        decoderH
+                                                                                            |> andThen
+                                                                                                (\h ->
+                                                                                                    succeed <|
+                                                                                                        func a b c d e f g h
+                                                                                                )
+                                                                                    )
+                                                                        )
+                                                            )
+                                                )
+                                    )
+                        )
+            )
+
+
+-- FANCY DECODING
+
+
+{-| Create a decoder that's hard-coded to a specific value.
+
+For example:
+
+    Turso.Db.Decode.succeed "abc"
+
+Will always decode to "abc" regardless of input.
+
+This is most often used with [`andThen`](#andThen).
+-}
+succeed : a -> Decoder a
+succeed a =
+    Decoder <|
+        Json.Decode.succeed a
+
+
+{-| Force a decoder to fail.
+
+This is most often used with [`andThen`](#andThen).
+-}
+fail : String -> Decoder a
+fail reason =
+    Decoder <|
+        Json.Decode.fail reason
+
+
+{-| Chain decoders together.
+
+This is most often used this conjunction with [`succeed`](#succeed) and [`fail`](#fail).
+For example:
+
+    Turso.Db.Decode.string "email"
+        |> Turso.Db.Decode.andThen
+            (\email ->
+                when Email.fromString email is
+                    Just email -> 
+                        Turso.Db.Decode.succeed email
+
+                    Nothing -> 
+                        Turso.Db.Decode.fail "invalid email"
+            )
+
+-}
+andThen : (a -> Decoder b) -> Decoder a -> Decoder b
+andThen mapper decoder =
+    unwrap decoder
+        |> Json.Decode.andThen (mapper >> unwrap)
+        |> Decoder
+
+
+-- HELPERS
+
+
+{-| Unwrap a `Decoder` and turns it into a normal `Json.Decode.Decoder`
+
+This is used by other modules in this package and not needed to properly 
+decode data returned from queries.
+-}
+unwrap : Decoder a -> Json.Decode.Decoder a
+unwrap decoder_ =
+    when decoder_ is
+        Decoder decoder ->
+            decoder
+
+        FieldDecoder { name, decoder } ->
+            Json.Decode.field name decoder

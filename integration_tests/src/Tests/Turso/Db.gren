@@ -1,0 +1,224 @@
+module Tests.Turso.Db exposing ( tests )
+
+
+{-|-}
+
+import Expect
+import Test.Runner.Effectful exposing (Test, run, describe, test, await, awaitError)
+import Turso.Db
+import Turso.Db.Encode
+import Turso.Db.Decode
+
+
+{-| Configuration needed to run tests.
+
+`tableName` is the name of the table where queries will be tested against.
+-}
+type alias Configuration =
+    { tableName : String
+    }
+
+
+{-|-}
+tests : Turso.Db.Connection -> Configuration -> Test
+tests connection config =
+    await
+        (Turso.Db.execute
+            connection
+            { statement = "CREATE TABLE IF NOT EXISTS test (test TEXT)"
+            , parameters = []
+            }
+        )
+        "Awaiting sending a create table statement to database"
+        (\_ -> 
+            describe "Tests for the `Turso.Db` module"
+                [ transactionTests connection config
+                , executeTests connection config
+                , getAllTests connection config
+                , getMaybeOneTests connection config
+                , getOneTests connection config
+                ]
+        )
+
+
+{-|-}
+transactionTests : Turso.Db.Connection -> Configuration -> Test
+transactionTests connection config =
+    describe "Tests for the `transaction` function"
+        [ await 
+            (Turso.Db.transaction
+                connection
+                [ { statement = "INSERT INTO test(test) VALUES (:test)"
+                , parameters = 
+                    [ Turso.Db.Encode.string "test" "a test value"
+                    ]
+                }
+                , { statement = "INSERT INTO test(test) VALUES (:test)"
+                , parameters = 
+                    [ Turso.Db.Encode.string "test" "a test value"
+                    ]
+                }
+                ]
+            )
+            "Await executing a transaction with multiple statements"
+            (\res ->
+                test "It passes!"
+                    (\_ ->
+                        Expect.pass
+                    )
+            )
+        ]
+
+
+{-|-}
+executeTests : Turso.Db.Connection -> Configuration -> Test
+executeTests connection config =
+    describe "Tests for the `execute` function"
+        [ await
+            (Turso.Db.execute 
+                connection
+                { statement = "INSERT INTO test(test) VALUES (:testparam)"
+                , parameters = 
+                    [ Turso.Db.Encode.string "testparam" "11354314315135133151353"
+                    ]
+                }
+            )
+            "Await executing a transaction with a single statement"
+            (\res ->
+                test "It passes!"
+                    (\_ ->
+                        Expect.pass
+                    )
+            )
+        ]
+
+
+{-|-}
+getAllTests : Turso.Db.Connection -> Configuration -> Test
+getAllTests connection config =
+    describe "Tests for the `getAll` function"
+        [ await
+            (Turso.Db.getAll
+                connection
+                { query = "SELECT * FROM test"
+                , parameters = []
+                , decoder = 
+                    Turso.Db.Decode.map
+                        (\test ->
+                            { test = test
+                            }
+                        )
+                        (Turso.Db.Decode.string "test")
+                }
+            )
+            "Await selecting all rows from the test database"
+            (\res ->
+                test "It passes!"
+                    (\_ ->
+                        Expect.pass
+                    )
+            )
+        ]
+
+
+{-|-}
+getMaybeOneTests : Turso.Db.Connection -> Configuration -> Test
+getMaybeOneTests connection config =
+    describe "Tests for the `getMaybeOne` function"
+        [ await
+            (Turso.Db.getMaybeOne
+                connection
+                { query = "SELECT * FROM test WHERE \"test\" = \"11354314315135133151353\""
+                , parameters = []
+                , decoder = 
+                    Turso.Db.Decode.map
+                        (\test ->
+                            { test = test
+                            }
+                        )
+                        (Turso.Db.Decode.string "test")
+                }
+            )
+            "Await selecting maybe one row from the database"
+            (\res ->
+                test "The result should equal the expected value"
+                    (\_ ->
+                        when res.data.result is
+                            Just { data } ->
+                                Expect.equal data.test "11354314315135133151353"
+                            
+                            Nothing ->
+                                Expect.fail "The function should return the expected value"
+                    )
+            )
+        , await
+            (Turso.Db.getMaybeOne
+                connection
+                { query = "SELECT * FROM test WHERE \"test\" = \"a test value\""
+                , parameters = []
+                , decoder = 
+                    Turso.Db.Decode.map
+                        (\test ->
+                            { test = test
+                            }
+                        )
+                        (Turso.Db.Decode.string "test")
+                }
+            )
+            "Await selecting maybe one row from the database when there are more than one known result"
+            (\res ->
+                test "The result should equal the expected value"
+                    (\_ ->
+                        Expect.equal res.data.result Nothing
+                    )
+            )
+        ]
+
+
+{-|-}
+getOneTests : Turso.Db.Connection -> Configuration -> Test
+getOneTests connection config =
+    describe "Tests for the `getOne` function"
+        [ await
+            (Turso.Db.getOne
+                connection
+                { query = "SELECT * FROM test WHERE \"test\" = \"11354314315135133151353\""
+                , parameters = []
+                , decoder = 
+                    Turso.Db.Decode.map
+                        (\test ->
+                            { test = test
+                            }
+                        )
+                        (Turso.Db.Decode.string "test")
+                }
+            )
+            "Await selecting one row from the database"
+            (\res ->
+                test "The result should equal the expected value"
+                    (\_ ->
+                        Expect.equal res.data.result.data.test "11354314315135133151353"
+                    )
+            )
+        , awaitError
+            (Turso.Db.getOne
+                connection
+                { query = "SELECT * FROM test WHERE \"test\" = \"a test value\""
+                , parameters = []
+                , decoder = 
+                    Turso.Db.Decode.map
+                        (\test ->
+                            { test = test
+                            }
+                        )
+                        (Turso.Db.Decode.string "test")
+                }
+            )
+            "Await selecting one row from the database when there are more than one known result"
+            (\res ->
+                test "The function errors successfully, as expected"
+                    (\_ ->
+                        Expect.pass
+                    )
+            )
+        ]

@@ -1,0 +1,23 @@
+module Turso.Platform exposing ( Connection )
+
+{-| Configure access to the Turso Platform API.
+
+@docs Connection
+-}
+
+import HttpClient
+
+
+{-| A connection to the Turso Platform API for a specific organization.
+
+- `httpPermission` allows functions using this `Connection` can make 
+HTTP requests.
+- `accessToken` value is the Turso API token used to make requests to
+the organization name specified with the `organizationSlug` value.
+- `organiztionSlug` is the name (or slug) of your organization in Turso.
+-}
+type alias Connection =
+    { httpPermission : HttpClient.Permission
+    , accessToken : String
+    , organizationSlug : String
+    }

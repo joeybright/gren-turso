@@ -1,0 +1,871 @@
+module Turso.Platform.Databases exposing 
+    ( Database
+    , ListArgs, ListError(..), list
+    , RetrieveArgs, RetrieveError(..), retrieve
+    , CreateArgs, CreateResult, CreateError(..), create
+    , DeleteArgs, DeleteResult, DeleteError(..), delete
+    , CreateTokenArgs, TokenAuthorization(..), CreateTokenResult, createToken
+    , InvalidateTokensArgs, InvalidateTokensError(..), invalidateTokens
+    , UsageArgs, UsageResult, UsageStats, UsageError(..), usage
+    , StatsArgs, StatsResult, StatsError(..), stats
+    )
+
+{-| Interact with databases in Turso.
+
+@docs Database
+
+## List Databases
+
+@docs ListArgs, ListError, list
+
+## Get a Single Database
+
+@docs RetrieveArgs, RetrieveError, retrieve
+
+## Create Databases
+
+@docs CreateArgs, CreateResult, CreateError, create
+
+## Delete Databases
+
+@docs DeleteArgs, DeleteResult, DeleteError, delete
+
+## Create Database Tokens
+
+Create tokens for a specific database in Turso. These tokens can be used
+to query databases with the `Turso.Db` module.
+
+@docs CreateTokenArgs, TokenAuthorization, CreateTokenResult, createToken
+
+## Invalidate Database Tokens
+
+@docs InvalidateTokensArgs, InvalidateTokensError, invalidateTokens
+
+## Get Database Usage
+
+@docs UsageArgs, UsageStats, UsageResult, UsageError, usage
+
+## Get Database Stats
+
+@docs StatsArgs, StatsResult, StatsError, stats
+
+-}
+
+import Node
+import HttpClient
+import Task exposing (Task)
+import Json.Decode
+import Json.Encode
+import Url.Builder
+import HttpServer
+import Turso.Helpers
+import Turso.Platform
+
+
+
+-- DATABASE
+
+
+{-| A database in Turso. Many functions in this module return a `Database`.
+-}
+type alias Database = 
+    { name : String
+    , databaseId : String
+    , hostname : String
+    , blockReads : Bool
+    , blockWrites : Bool
+    , regions : Array String
+    , primaryRegion : String
+    , group : String
+    , deleteProtection : Bool
+    , parent : 
+        Maybe 
+            { id : String
+            , name : String
+            , branchedAt : String
+            }
+    }
+
+
+{-|-}
+databaseDecoder : Json.Decode.Decoder Database
+databaseDecoder =
+    (Json.Decode.map3
+        (\rest deleteProtection parent ->
+            { name = rest.name
+            , databaseId = rest.databaseId
+            , hostname = rest.hostname
+            , blockReads = rest.blockReads
+            , blockWrites = rest.blockWrites
+            , regions = rest.regions
+            , primaryRegion = rest.primaryRegion
+            , group = rest.group
+            , deleteProtection = deleteProtection
+            , parent = parent
+            }
+        )
+        (Json.Decode.map8
+            (\name dbId hostname blockReads blockWrites regions primaryRegion group -> 
+                { name = name
+                , databaseId = dbId
+                , hostname = hostname
+                , blockReads = blockReads
+                , blockWrites = blockWrites
+                , primaryRegion = primaryRegion
+                , regions = regions
+                , group = group
+                }
+            )
+            (Json.Decode.field "Name" Json.Decode.string)
+            (Json.Decode.field "DbId" Json.Decode.string)
+            (Json.Decode.field "Hostname" Json.Decode.string)
+            (Json.Decode.field "block_reads" Json.Decode.bool)
+            (Json.Decode.field "block_writes" Json.Decode.bool)
+            (Json.Decode.field "regions" (Json.Decode.array Json.Decode.string))
+            (Json.Decode.field "primaryRegion" Json.Decode.string)
+            (Json.Decode.field "group" Json.Decode.string)
+        )
+        (Json.Decode.field "delete_protection" Json.Decode.bool)
+        (Json.Decode.field "parent" 
+            (Json.Decode.maybe 
+                (Json.Decode.map3
+                    (\id name branchedAt ->
+                        { id = id
+                        , name = name
+                        , branchedAt = branchedAt
+                        }
+                    )
+                    (Json.Decode.field "id" Json.Decode.string)
+                    (Json.Decode.field "name" Json.Decode.string)
+                    (Json.Decode.field "branched_at" Json.Decode.string)
+                )
+            )
+        )
+    )
+
+
+
+-- LIST DATABASES
+
+
+{-| Arguments for the `list` function.
+
+Both `group` and `parent` are optional. Not providing them will list all databases
+for the given organization specified in `Turso.Platform.Connection` If provided,
+they do the following:
+
+- `group` will filter the resulting list based on the group name provided.
+- `parent` will filter the resulting list to databases whose parent database matches
+the id of the passed parent database.
+-}
+type alias ListArgs =
+    { groupName : Maybe String
+    , parentDbId : Maybe String
+    }
+
+
+{-| Errors that can happen when attempting to list databases.
+
+- `ListErrorGroupNotFound` happens when, if a group name is provided, that group 
+does not exist.
+- `ListHttpError` captures any other HTTP errors.
+-}
+type ListError
+    = ListErrorGroupNotFound
+    | ListHttpError (HttpClient.Error (Array Database))
+
+
+{-|-}
+listDecoder : Json.Decode.Decoder (Array Database)
+listDecoder =
+    Json.Decode.field "databases" (Json.Decode.array databaseDecoder)
+
+
+{-| List databases in your Turso organization.
+
+When successfully, returns an `Array Database` of the retrieved databases.
+-}
+list : Turso.Platform.Connection -> ListArgs -> Task ListError (HttpClient.Response (Array Database))
+list { httpPermission, accessToken, organizationSlug } params =
+    let
+        { parentDbId, groupName } =
+            params
+
+        url =
+            Url.Builder.crossOrigin 
+                "https://api.turso.tech/v1" 
+                [ "organizations", organizationSlug, "databases" ]
+                (Turso.Helpers.maybeUrlParams
+                    [ { key = "group", value = groupName }
+                    , { key = "parent", value = parentDbId }
+                    ]
+                )
+    in
+    HttpClient.get url
+        |> HttpClient.withHeader "Authorization" ("Bearer " ++ accessToken)
+        |> HttpClient.expectJson listDecoder
+        |> HttpClient.send httpPermission
+        |> Task.mapError (\err ->
+            when err is
+                HttpClient.BadStatus { statusCode = 404 } ->
+                    ListErrorGroupNotFound
+
+                _ ->
+                    ListHttpError err
+        )
+
+
+
+-- CREATE DATABASE
+
+
+{-| Results of successfully creating a database with the Turso API.
+
+- `databaseId` is the newly created databases id in Turso.
+- `databaseName` is the name of the newly created database. This will match
+the name given to the `create` function.
+- `hostname` is a value that can be used to make specific requests to that
+database using the `Turso.Db` module in this package.
+-}
+type alias CreateResult =
+    { databaseId : String
+    , databaseName : String
+    , hostname : String
+    }
+
+
+{-| Arguments needed to create a database. 
+
+- `group` is the group the created database will be a part of. This group must 
+already be created or else the request will fail. 
+- `databaseName` is the name of the newly created database. The request will 
+fail if there is already a database of the specified name created.
+-}
+type alias CreateArgs =
+    { databaseName : String
+    , group : String
+    }
+
+
+{-| Errors that can happen when attempting to create a database.
+
+- `CreateErrorDatabaseAlreadyExists` happens when you're trying to create a 
+database whose name already existing in Turso for the group you're making 
+the database in.
+- `CreateErrorGroupNotFound` happens when the group you're trying to create the
+database for does not exist in the organization.
+- `CreateHttpError` captures any other HTTP errors.
+-}
+type CreateError
+    = CreateErrorDatabaseAlreadyExists
+    | CreateErrorGroupNotFound
+    | CreateHttpError (HttpClient.Error CreateResult)
+
+
+{-|-}
+createResultDecoder : Json.Decode.Decoder CreateResult
+createResultDecoder =
+    Json.Decode.field "database" 
+        (Json.Decode.map3
+            (\id hostname name ->
+                { databaseId = id
+                , databaseName = name
+                , hostname = hostname
+                }
+            )
+            (Json.Decode.field "DbId" Json.Decode.string)
+            (Json.Decode.field "Hostname" Json.Decode.string)
+            (Json.Decode.field "Name" Json.Decode.string)
+        )
+
+
+{-|-}
+createBodyEncoder : CreateArgs -> Json.Encode.Value
+createBodyEncoder { databaseName, group } = 
+    Json.Encode.object
+        [ { key = "name", value = Json.Encode.string databaseName }
+        , { key = "group", value = Json.Encode.string group }
+        ]
+
+{-| Create a new Turso database.
+-}
+create : Turso.Platform.Connection -> CreateArgs -> Task CreateError (HttpClient.Response CreateResult)
+create { httpPermission, accessToken, organizationSlug } params =
+    HttpClient.post ("https://api.turso.tech/v1/organizations/" ++ organizationSlug ++ "/databases")
+        |> HttpClient.withHeader "Authorization" ("Bearer " ++ accessToken)
+        |> HttpClient.withJsonBody (createBodyEncoder params)
+        |> HttpClient.expectJson createResultDecoder
+        |> HttpClient.send httpPermission
+        |> Task.mapError (\err ->
+            when err is
+                HttpClient.BadStatus { statusCode = 409 } ->
+                    CreateErrorDatabaseAlreadyExists
+
+                HttpClient.BadStatus { statusCode = 400 } ->
+                    CreateErrorGroupNotFound
+
+                _ ->
+                    CreateHttpError err
+        )
+
+
+
+-- RETRIEVE DATABASE
+
+
+{-| Arguments for the `retrieve` function.
+
+- `databaseName` is the name of the database you want to retrieve.
+-}
+type alias RetrieveArgs =
+    { databaseName : String
+    }
+
+
+{-| Errors that can happen when attempting to retrieve a database.
+
+- `RetrieveErrorDatabaseNotFound` happens when the passed database name does
+not exist in Turso.
+- `RetrieveHttpError` captures any other HTTP errors.
+-}
+type RetrieveError
+    = RetrieveErrorDatabaseNotFound
+    | RetrieveHttpError (HttpClient.Error Database)
+
+
+{-|-}
+retrieveResultDecoder : Json.Decode.Decoder Database
+retrieveResultDecoder =
+    Json.Decode.field "database" databaseDecoder
+
+
+{-| Retrieve a specific database by name.
+
+When successful, returns a single `Database` record.
+-}
+retrieve : Turso.Platform.Connection -> RetrieveArgs -> Task RetrieveError (HttpClient.Response Database)
+retrieve { httpPermission, accessToken, organizationSlug } { databaseName } =
+    let
+        url =
+            Url.Builder.crossOrigin 
+                "https://api.turso.tech/v1" 
+                [ "organizations", organizationSlug, "databases", databaseName ]
+                []
+    in
+    HttpClient.get url
+        |> HttpClient.withHeader "Authorization" ("Bearer " ++ accessToken)
+        |> HttpClient.expectJson retrieveResultDecoder
+        |> HttpClient.send httpPermission
+        |> Task.mapError (\err ->
+             when err is
+                HttpClient.BadStatus { statusCode = 404 } ->
+                    RetrieveErrorDatabaseNotFound
+
+                _ ->
+                    RetrieveHttpError err
+        )
+
+
+
+-- RETRIEVE DATABASE CONFIGURATIONS
+
+
+{-|-}
+retrieveConfigurations =
+    Debug.todo "https://docs.turso.tech/api-reference/databases/configuration"
+
+
+
+-- UPDATE DATABASE CONFIGURATIONS
+
+
+{-|-}
+updateConfiguration =
+    Debug.todo "https://docs.turso.tech/api-reference/databases/update-configuration"
+
+
+
+-- DATABASE USAGE
+
+
+{-| The specific stats for an individual database.
+-}
+type alias UsageStats =
+    { rowsRead : Int
+    , rowsWritten : Int
+    , storageBytes : Int
+    , bytesSynced : Int
+    }
+
+
+{-| The results of getting usage information for a database.
+
+- `databaseId` is the id of the database you're getting usage for
+- `totaUsage` is sum of all of the `UsageStats` from all instances
+of the given database.
+- `instances` is the usage for each specific instance of the database.
+-}
+type alias UsageResult =
+    { databaseId : String
+    , totalUsage : UsageStats
+    , instances :
+        Array 
+            { databaseInstanceId : String
+            , usage : UsageStats
+            }
+    }
+
+
+{-| Arguments for the `usage` function.
+
+- `databaseName` is the name of the database you want to get usage
+information for
+- `from` is the first date you want to get usage for.
+- `to` is the last date you want to get usage for.
+
+Both `from` and `to` must be ISO 8601 strings.
+-}
+type alias UsageArgs =
+    { databaseName : String
+    , from : Maybe String
+    , to : Maybe String
+    }
+
+
+{-| Errors that can happen when attempting to retrieve usage 
+information for a database.
+
+- `UsageErrorInvalidQueryParameter` happens when the passed `from` or 
+`to` values are not valid ISO 8601 strings.
+- `UsageErrorDatabaseNotFound` happens when the passed database name 
+does not exist yet in Turso.
+- `RetrieveHttpError` captures any other HTTP errors.
+-}
+type UsageError
+    = UsageErrorInvalidQueryParameter
+    | UsageErrorDatabaseNotFound
+    | UsageHttpError (HttpClient.Error UsageResult)
+
+
+{-|-}
+usageResultsDecoder : Json.Decode.Decoder UsageResult
+usageResultsDecoder =
+    let
+        statsDecoder : Json.Decode.Decoder UsageStats
+        statsDecoder =
+            Json.Decode.map4
+                (\read written storage synced ->
+                    { rowsRead = read 
+                    , rowsWritten = written
+                    , storageBytes = storage
+                    , bytesSynced = synced
+                    }
+                )
+                (Json.Decode.field "rows_read" Json.Decode.int)
+                (Json.Decode.field "rows_written" Json.Decode.int)
+                (Json.Decode.field "storage_bytes" Json.Decode.int)
+                (Json.Decode.field "bytes_synced" Json.Decode.int)
+    in
+    Json.Decode.field "database"
+        (Json.Decode.map3
+            (\id total instances ->
+                { databaseId = id
+                , totalUsage = total
+                , instances = instances
+                }
+            )
+            (Json.Decode.field "uuid" Json.Decode.string)
+            (Json.Decode.field "usage" statsDecoder)
+            (Json.Decode.field "instances"
+                (Json.Decode.array
+                    (Json.Decode.map2
+                        (\instanceId usageValue ->
+                            { databaseInstanceId = instanceId
+                            , usage = usageValue
+                            }
+                        )
+                        (Json.Decode.field "uuid" Json.Decode.string)
+                        (Json.Decode.field "usage" statsDecoder)
+                    )
+                )
+            )
+        )
+
+
+{-| Get the usage information for a given database.
+-}
+usage : Turso.Platform.Connection -> UsageArgs -> Task UsageError (HttpClient.Response UsageResult)
+usage { httpPermission, accessToken, organizationSlug } { databaseName, from, to } =
+    let
+        url =
+            Url.Builder.crossOrigin
+                "https://api.turso.tech"
+                [ "v1", "organizations", organizationSlug, "databases", databaseName, "usage" ]
+                (Turso.Helpers.maybeUrlParams
+                    [ { key = "from", value = from } 
+                    , { key = "to", value = to }
+                    ]
+                )
+    in
+    HttpClient.get url
+        |> HttpClient.withHeader "Authorization" ("Bearer " ++ accessToken)
+        |> HttpClient.expectJson usageResultsDecoder
+        |> HttpClient.send httpPermission
+        |> Task.mapError (\err ->
+             when err is
+                HttpClient.BadStatus { statusCode = 400 } ->
+                    UsageErrorInvalidQueryParameter
+
+                HttpClient.BadStatus { statusCode = 404 } ->
+                    UsageErrorDatabaseNotFound
+
+                _ ->
+                    UsageHttpError err
+        )
+
+
+
+-- DATABASE STATS
+
+
+{-| The results of getting stats for a database.
+
+- `topQueries` is an array of the queries who have done the most reading
+and writing of rows for the database.
+-}
+type alias StatsResult =
+    { topQueries :
+        Array
+            { query : String
+            , rowsRead : Int
+            , rowsWritten : Int
+            }
+    }
+
+
+{-| Arguments for the `stats` function.
+
+- `databaseName` is the name of the database you want to get stats for.
+-}
+type alias StatsArgs =
+    { databaseName : String
+    }
+
+
+{-| Errors that can happen when attempting to retrieve stats for a database.
+
+- `StatsErrorDatabaseNotFound` happens when the passed database name 
+does not exist in Turso.
+- `StatsHttpError` captures any other HTTP errors.
+-}
+type StatsError
+    = StatsErrorDatabaseNotFound
+    | StatsHttpError (HttpClient.Error StatsResult)
+
+
+{-|-}
+statsResultDecoder : Json.Decode.Decoder StatsResult
+statsResultDecoder =
+    Json.Decode.map
+        (\maybeTopQueries ->
+            { topQueries = Maybe.withDefault [] maybeTopQueries
+            }
+        )
+        (Json.Decode.field "top_queries"
+            (Json.Decode.maybe
+                (Json.Decode.array
+                    (Json.Decode.map3
+                        (\query read written ->
+                            { query = query
+                            , rowsRead = read
+                            , rowsWritten = written
+                            }
+                        )
+                        (Json.Decode.field "query" Json.Decode.string)
+                        (Json.Decode.field "rows_read" Json.Decode.int)
+                        (Json.Decode.field "rows_written" Json.Decode.int)
+                    )
+                )
+            )
+        )
+
+
+{-| Get stats for a given database.
+-}
+stats : Turso.Platform.Connection -> StatsArgs -> Task StatsError (HttpClient.Response StatsResult)
+stats { httpPermission, accessToken, organizationSlug } { databaseName } =
+    let
+        url =
+            Url.Builder.crossOrigin
+                "https://api.turso.tech"
+                [ "v1", "organizations", organizationSlug, "databases", databaseName, "stats" ]
+                []
+    in
+    HttpClient.get url
+        |> HttpClient.withHeader "Authorization" ("Bearer " ++ accessToken)
+        |> HttpClient.expectJson statsResultDecoder
+        |> HttpClient.send httpPermission
+        |> Task.mapError (\err ->
+             when err is
+                HttpClient.BadStatus { statusCode = 404 } ->
+                    StatsErrorDatabaseNotFound
+
+                _ ->
+                    StatsHttpError err
+        )
+
+
+
+-- DELETE DATABASE
+
+
+{-| Results of successfully deleting a database.
+
+- `databaseName` is the name of the deleted database. This should match
+the name given in the `delete` function.
+-}
+type alias DeleteResult =
+    { databaseName : String
+    }
+
+
+{-| Arguments for the `delete` function.
+
+- `databaseName` is the name of the database you want to delete.
+-}
+type alias DeleteArgs =
+    { databaseName : String
+    }
+
+
+{-| Errors that can happen when attempting to delete a database.
+
+- `DeleteErrorDatabaseNotFound` happens when the passed database name does
+not exist yet in Turso.
+- `DeleteHttpError` captures any other HTTP errors.
+-}
+type DeleteError
+    = DeleteErrorDatabaseNotFound
+    | DeleteHttpError (HttpClient.Error DeleteResult)
+
+
+{-|-}
+deleteResultDecoder : Json.Decode.Decoder DeleteResult
+deleteResultDecoder =
+    Json.Decode.map
+        (\name -> 
+            { databaseName = name
+            }
+        )
+        (Json.Decode.field "database" Json.Decode.string)
+
+
+{-| Delete a database in Turso.
+-}
+delete : Turso.Platform.Connection -> DeleteArgs -> Task DeleteError (HttpClient.Response DeleteResult)
+delete { httpPermission, accessToken, organizationSlug } { databaseName } =
+    let
+        url =
+            Url.Builder.crossOrigin 
+                "https://api.turso.tech/v1" 
+                [ "organizations", organizationSlug, "databases", databaseName ]
+                []
+    in
+    HttpClient.request HttpServer.DELETE url
+        |> HttpClient.withHeader "Authorization" ("Bearer " ++ accessToken)
+        |> HttpClient.expectJson deleteResultDecoder
+        |> HttpClient.send httpPermission
+        |> Task.mapError (\err ->
+            when err is
+                HttpClient.BadStatus { statusCode = 404 } ->
+                    DeleteErrorDatabaseNotFound
+
+                _ ->
+                    DeleteHttpError err
+        ) 
+
+
+
+-- LIST DATABASE INSTANCES
+
+
+{-|-}
+listInstances =
+    Debug.todo "https://docs.turso.tech/api-reference/databases/list-instances"
+
+
+
+-- RETRIEVE DATABASE INSTANCE
+
+
+{-|-}
+retrieveInstance =
+    Debug.todo "https://docs.turso.tech/api-reference/databases/retrieve-instance"
+
+
+
+-- CREATE DATABASE ACCESS TOKEN
+
+
+{-| Results of successfully creating token for a database.
+
+- `jwt` is a `String` representing the created JWT (JavaScipt Web Token).
+-}
+type alias CreateTokenResult =
+    { jwt : String
+    }
+
+
+{-| Represents the type of access a token is allowed to have for the
+database.
+
+- `FullAccess` allows reading and writing data to the database.
+- `ReadOnly` only allows queries to read data from the database.
+-}
+type TokenAuthorization
+    = FullAccess
+    | ReadOnly
+
+
+{-| Arguments needed to create a database token. 
+
+- `databaseName` is the name of the database you want to create the
+token for.
+- `expiration` field is a string representing when the token expires.
+This must resemble the following format: `2w1d30m`. If not provided,
+the token will never expire.
+- `authorization` value specifies what type of actions the token will
+be able to take on the database. The default value is `FullAccess`. See
+the `TokenAuthorization` type for more options.
+- `permissions` record has one field: `readAttachDatabases`. Providing
+an array of database ids which this token is allowed to attach to a SQL
+statement with the `ATTACH` keyword. If not required, an empty array
+(`[]`) can be provided as the value.
+-}
+type alias CreateTokenArgs =
+    { databaseName : String
+    , expiration : Maybe String
+    , authorization : Maybe TokenAuthorization
+    , permissions : 
+        { readAttachDatabases : Array String
+        }
+    }
+
+
+{-|-}
+tokenAuthorizationToString : TokenAuthorization -> String
+tokenAuthorizationToString tokenAuth =
+    when tokenAuth is
+        FullAccess ->
+            "full-access"
+        
+        ReadOnly ->
+            "read-only"
+
+
+{-|-}
+createTokenBodyEncoder : CreateTokenArgs -> Json.Encode.Value
+createTokenBodyEncoder { permissions } =
+    Json.Encode.object
+        [ { key = "permissions"
+          , value = Json.Encode.object
+            [ { key = "read_attach"
+              , value = Json.Encode.object
+                    [ { key = "databases"
+                      , value = 
+                        Json.Encode.array 
+                            Json.Encode.string 
+                            permissions.readAttachDatabases
+                      }
+                    ]
+              }
+            ]
+          }
+        ]
+
+
+{-|-}
+createTokenResultDecoder : Json.Decode.Decoder CreateTokenResult
+createTokenResultDecoder =
+    Json.Decode.map
+        (\jwt ->
+            { jwt = jwt
+            }
+        )
+        (Json.Decode.field "jwt" Json.Decode.string)
+
+
+{-| Create a token for operating on a database in Turso.
+-}
+createToken : Turso.Platform.Connection -> CreateTokenArgs -> Task (HttpClient.Error CreateTokenResult) (HttpClient.Response CreateTokenResult)
+createToken { httpPermission, accessToken, organizationSlug } params =
+    let
+        { databaseName, expiration, authorization } =
+            params
+
+        url =
+            Url.Builder.crossOrigin 
+                "https://api.turso.tech/v1" 
+                [ "organizations", organizationSlug, "databases", databaseName, "auth", "tokens" ]
+                (Turso.Helpers.maybeUrlParams
+                    [ { key = "expiration", value = expiration }
+                    , { key = "authorization", value = (Maybe.map tokenAuthorizationToString authorization) }
+                    ]
+                )
+    in
+    HttpClient.post url
+        |> HttpClient.withHeader "Authorization" ("Bearer " ++ accessToken)
+        |> HttpClient.withJsonBody (createTokenBodyEncoder params)
+        |> HttpClient.expectJson createTokenResultDecoder
+        |> HttpClient.send httpPermission
+
+
+
+-- INVALIDATE DATABASE ACCESS TOKENS
+
+
+{-| Errors that can happen when attempting to invalidate a databases tokens.
+
+- `InvalidateTokensErrorDatabaseNotFound` happens when the passed database name does
+not exist yet in Turso.
+- `InvalidateTokensHttpError` captures any other HTTP errors.
+-}
+type InvalidateTokensError
+    = InvalidateTokensErrorDatabaseNotFound
+    | InvalidateTokensHttpError (HttpClient.Error {})
+
+
+{-| Arguments needed to invalidate all tokens for a database.
+
+- `databaseName` is the database you want to invalid the tokens for.
+-}
+type alias InvalidateTokensArgs =
+    { databaseName : String
+    }
+
+
+{-| Invalidate all tokens for the given database name.
+
+When successfull, will invalidate all tokens for the given database, but returns no values.
+-}
+invalidateTokens : Turso.Platform.Connection -> InvalidateTokensArgs -> Task InvalidateTokensError (HttpClient.Response {})
+invalidateTokens { httpPermission, accessToken, organizationSlug } { databaseName } =
+    let
+        url =
+            Url.Builder.crossOrigin
+                "https://api.turso.tech/v1"
+                [ "organizations", organizationSlug, "databases", databaseName, "auth", "rotate" ]
+                []
+    in
+    HttpClient.post url
+        |> HttpClient.withHeader "Authorization" ("Bearer " ++ accessToken)
+        |> HttpClient.expectNothing
+        |> HttpClient.send httpPermission
+        |> Task.mapError (\err ->
+            when err is
+                HttpClient.BadStatus { statusCode = 404 } ->
+                    InvalidateTokensErrorDatabaseNotFound
+
+                _ ->
+                    InvalidateTokensHttpError err
+        )

@@ -1,0 +1,19 @@
+module Main exposing (main)
+
+{-|-}
+
+import Expect
+import Test exposing (describe, test)
+import Test.Runner.Node exposing (Program, run)
+import Tests.Turso.Db.Encode
+import Tests.Turso.Db.Decode
+
+
+{-|-}
+main : Program
+main =
+    run <|
+        describe "All tests"
+            [ Tests.Turso.Db.Encode.tests
+            , Tests.Turso.Db.Decode.tests
+            ]

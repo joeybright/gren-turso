@@ -1,0 +1,22 @@
+{
+    "type": "application",
+    "platform": "node",
+    "source-directories": [
+        "src"
+    ],
+    "gren-version": "0.5.3",
+    "dependencies": {
+        "direct": {
+            "blaix/gren-effectful-tests-node": "4.1.0",
+            "gren-lang/compiler-node": "2.0.0",
+            "gren-lang/core": "6.0.1",
+            "gren-lang/node": "5.0.4",
+            "gren-lang/test": "4.1.0",
+            "joeybright/gren-turso": "local:../"
+        },
+        "indirect": {
+            "gren-lang/test-runner-node": "6.0.0",
+            "gren-lang/url": "5.0.0"
+        }
+    }
+}

@@ -1,0 +1,77 @@
+module Tests.Turso.Db.Encode exposing ( tests )
+
+{-|-}
+
+import Expect
+import Json.Decode
+import Fuzz
+import Test exposing (Test, describe, test, fuzz)
+import Turso.Db.Encode
+import Time
+
+
+{-|-}
+tests : Test
+tests =
+    describe "Tests for the `Turso.Db.Encode` module"
+        [ boolTests
+        ]
+
+
+{-|-}
+boolTests : Test
+boolTests =
+    describe "Tests for the `Turso.Db.Encode.bool` function"
+        [ test "Encoding a `True` value produces expected JSON value"
+            (\_ ->
+                let
+                    value =
+                        Turso.Db.Encode.bool "bool_field" True
+                            |> Turso.Db.Encode.unwrap
+                            |> .value
+                in
+                Json.Decode.decodeValue 
+                    Json.Decode.int
+                    value
+                    |> Expect.equal (Ok 1)
+            )
+        , test "Encoding a `False` value produces expected JSON value"
+            (\_ ->
+                let
+                    value =
+                        Turso.Db.Encode.bool "bool_field" False
+                            |> Turso.Db.Encode.unwrap
+                            |> .value
+                in
+                Json.Decode.decodeValue 
+                    Json.Decode.int
+                    value
+                    |> Expect.equal (Ok 0)
+            )
+        , test "Encoding an `Int` produces a `String` value, as needed by the Turso libSQL API"
+            (\_ ->
+                let
+                    value =
+                        Turso.Db.Encode.int "bool_field" 100
+                            |> Turso.Db.Encode.unwrap
+                            |> .value
+                in
+                Json.Decode.decodeValue
+                    Json.Decode.string
+                    value
+                    |> Expect.equal (Ok "100")
+            )
+        , test "Encoding a `Posix` value produces a `String` value, as needed by the Turso libSQL API"
+            (\_ ->
+                let
+                    value =
+                        Turso.Db.Encode.posix "posix_field" (Time.millisToPosix 123413)
+                            |> Turso.Db.Encode.unwrap
+                            |> .value
+                in
+                Json.Decode.decodeValue
+                    Json.Decode.string
+                    value
+                    |> Expect.equal (Ok "123413")
+            )
+        ]

@@ -1,0 +1,232 @@
+module Turso.Platform.Groups exposing 
+    ( Group
+    , list
+    , RetrieveArgs, RetrieveError(..), retrieve
+    , RetrieveConfigurationArgs, RetrieveConfigurationResult, RetrieveConfigurationError(..), retrieveConfiguration
+    )
+
+{-| Manage groups in Turso.
+
+This module is incomplete and only supports a subsset of groups 
+functionality in the Turso Platform API.
+
+@docs Group
+
+## List Groups
+
+@docs list
+
+## Get a Single Group
+
+@docs RetrieveArgs, RetrieveError, retrieve
+
+## Get Group Configuration
+
+@docs RetrieveConfigurationArgs, RetrieveConfigurationResult, RetrieveConfigurationError, retrieveConfiguration
+-}
+
+import Node
+import HttpClient
+import Task exposing (Task)
+import Json.Decode
+import Json.Encode
+import Url.Builder
+import HttpServer
+import Turso.Helpers
+import Turso.Platform
+
+
+
+-- GROUP
+
+
+{-| A group in Turso. Many functions in this module return a `Group`.
+-}
+type alias Group =
+    { name : String
+    , version : String
+    , groupId : String
+    , locations : Array String
+    , primaryLocation : String
+    , deleteProtection : Bool
+    }
+
+
+{-|-}
+groupDecoder : Json.Decode.Decoder Group
+groupDecoder =
+    Json.Decode.map6
+        (\name version id locations primaryLocation deleteProtection ->
+            { name = name
+            , version = version
+            , groupId = id
+            , locations = locations
+            , primaryLocation = primaryLocation
+            , deleteProtection = deleteProtection
+            }
+        )
+        (Json.Decode.field "name" Json.Decode.string)
+        (Json.Decode.field "version" Json.Decode.string)
+        (Json.Decode.field "uuid" Json.Decode.string)
+        (Json.Decode.field "locations" (Json.Decode.array Json.Decode.string))
+        (Json.Decode.field "primary" Json.Decode.string)
+        (Json.Decode.field "delete_protection" Json.Decode.bool)
+
+
+
+-- LIST
+
+
+{-|-}
+listDecoder : Json.Decode.Decoder (Array Group)
+listDecoder =
+    Json.Decode.field "groups" (Json.Decode.array groupDecoder)
+
+
+{-| List all groups in Turso for the organization specified in the 
+`Turso.Db.Connection`.
+-}
+list : Turso.Platform.Connection -> Task (HttpClient.Error (Array Group)) (HttpClient.Response (Array Group))
+list { httpPermission, accessToken, organizationSlug } =
+    let
+        url =
+            Url.Builder.crossOrigin 
+                "https://api.turso.tech/v1" 
+                [ "organizations", organizationSlug, "groups" ]
+                []
+    in
+    HttpClient.get url
+        |> HttpClient.withHeader "Authorization" ("Bearer " ++ accessToken)
+        |> HttpClient.expectJson listDecoder
+        |> HttpClient.send httpPermission
+
+
+
+-- CREATE
+
+
+{-|-}
+create =
+    Debug.todo ""
+
+
+
+-- RETRIEVE
+
+
+{-| Arguments for the `retrieve` function.
+
+- `groupName` is the group you're attempting to retrieve from Turso.
+-}
+type alias RetrieveArgs =
+    { groupName : String
+    }
+
+
+{-| Errors that can happen when attempting to get a group.
+
+- `RetrieveErrorGroupNotFound` happens when the given `groupName` does not exist.
+- `RetrieveHttpError` captures any other HTTP errors.
+-}
+type RetrieveError
+    = RetrieveErrorGroupNotFound
+    | RetrieveHttpError (HttpClient.Error Group)
+
+
+{-|-}
+retrieveDecoder : Json.Decode.Decoder Group
+retrieveDecoder =
+    Json.Decode.field "group" groupDecoder
+
+
+{-| Get a single group in Turso.
+-}
+retrieve : Turso.Platform.Connection -> RetrieveArgs -> Task RetrieveError (HttpClient.Response Group)
+retrieve { httpPermission, accessToken, organizationSlug } { groupName } =
+    let
+        url =
+            Url.Builder.crossOrigin 
+                "https://api.turso.tech/v1" 
+                [ "organizations", organizationSlug, "groups", groupName ]
+                []
+    in
+    HttpClient.get url
+        |> HttpClient.withHeader "Authorization" ("Bearer " ++ accessToken)
+        |> HttpClient.expectJson retrieveDecoder
+        |> HttpClient.send httpPermission
+        |> Task.mapError (\err ->
+             when err is
+                HttpClient.BadStatus { statusCode = 404 } ->
+                    RetrieveErrorGroupNotFound
+
+                _ ->
+                    RetrieveHttpError err
+        )
+
+
+
+-- RETRIEVE CONFIGURATION
+
+
+{-| Arguments for the `retrieve` function.
+
+- `groupName` is the group you're attempting to retrieve the configuration info of.
+-}
+type alias RetrieveConfigurationArgs =
+    { groupName : String
+    }
+
+
+{-| Result of successfully getting a groups configuration.
+
+- `deleteProtection` specifies if the group cannot be deleted.
+-}
+type alias RetrieveConfigurationResult =
+    { deleteProtection : Bool
+    }
+
+
+{-| Errors that can happen when attempting to get a group.
+
+- `RetrieveConfigurationErrorGroupNotFound` happens when the given `groupName` does not exist.
+- `RetrieveConfigurationHttpError` captures any other HTTP errors.
+-}
+type RetrieveConfigurationError
+    = RetrieveConfigurationErrorGroupNotFound
+    | RetrieveConfigurationHttpError (HttpClient.Error RetrieveConfigurationResult)
+
+
+{-|-}
+retrieveConfigurationDecoder : Json.Decode.Decoder RetrieveConfigurationResult
+retrieveConfigurationDecoder =
+    Json.Decode.map
+        (\delete ->
+            { deleteProtection = delete
+            }
+        )
+        (Json.Decode.field "delete_protection" Json.Decode.bool)
+
+
+{-| Retrieve the configuration for a group in Turso.
+-}
+retrieveConfiguration : Turso.Platform.Connection -> RetrieveConfigurationArgs -> Task RetrieveConfigurationError (HttpClient.Response RetrieveConfigurationResult)
+retrieveConfiguration { httpPermission, accessToken, organizationSlug } { groupName } =
+    let
+        url =
+            Url.Builder.crossOrigin 
+                "https://api.turso.tech/v1" 
+                [ "organizations", organizationSlug, "groups", groupName, "configuration" ]
+                []
+    in
+    HttpClient.get url
+        |> HttpClient.withHeader "Authorization" ("Bearer " ++ accessToken)
+        |> HttpClient.expectJson retrieveConfigurationDecoder
+        |> HttpClient.send httpPermission
+        |> Task.mapError (\err ->
+             when err is
+                HttpClient.BadStatus { statusCode = 404 } ->
+                    RetrieveConfigurationErrorGroupNotFound
+
+                _ ->
+                    RetrieveConfigurationHttpError err
+        )

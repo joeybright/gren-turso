@@ -1,0 +1,65 @@
+module Tests.Turso.Platform exposing ( tests )
+
+{-|-}
+
+import HttpClient
+import Crypto
+import Expect
+import Process
+import Test.Runner.Effectful exposing (Test, test, describe, await)
+import Tests.Turso.Db
+import Tests.Turso.Platform.Databases
+import Tests.Turso.Platform.Groups
+import Tests.Turso.Platform.Tokens
+
+
+{-|-}
+type alias Configuration =
+    { httpPermission : HttpClient.Permission
+    , token : String
+    , group : String
+    , org : String
+    }
+
+
+{-|-}
+tests : Configuration -> Test
+tests { httpPermission, token, group, org } =
+    let
+        connection =
+            { httpPermission = httpPermission
+            , accessToken = token
+            , organizationSlug = org
+            }
+    in
+    await Crypto.getSecureContext
+        "Awaiting secure context"
+        (\secureContext ->
+            await (Crypto.randomUuidV4 secureContext)
+                "Awaiting generation of a random UUID"
+                (\randomUuid ->
+                    describe "All tests"
+                        [ describe "Tests for the Turso Platform API"
+                            [ Tests.Turso.Platform.Databases.tests 
+                                connection
+                                { randomUuid = randomUuid
+                                , group = group
+                                }
+                                (\config cleanupTests ->
+                                    describe "Tests after creating a "
+                                        [ Tests.Turso.Db.tests 
+                                            config.databaseConnection 
+                                            { tableName = config.tableName 
+                                            }
+                                        , await
+                                            (Process.sleep 3000)
+                                            "Awaiting sleep"
+                                            (\_ -> cleanupTests)
+                                        ]
+                                )
+                            , Tests.Turso.Platform.Groups.tests connection group
+                            , Tests.Turso.Platform.Tokens.tests connection {}
+                            ]
+                        ]
+                )
+        )

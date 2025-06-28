@@ -1,0 +1,101 @@
+module Main exposing (..)
+
+import Bytes
+import Expect
+import Init
+import Node
+import HttpClient
+import Test.Runner.Effectful exposing (Test, run, describe, test, await, awaitError)
+import Turso.Platform.Databases
+import Json.Encode
+import Turso.Platform.Tokens
+import Process
+import Crypto
+import CLI.Parser
+import Task exposing ( Task )
+import Json.Decode
+import CLI.PrettyPrinter
+import Turso.Db
+import Turso.Db
+import Turso.Db.Encode
+import Turso.Db.Decode
+import Tests.Turso.Platform.Groups
+import Tests.Turso.Db
+import Tests.Turso.Platform.Databases
+import Tests.Turso.Platform.Tokens
+import Tests.Turso.Platform
+
+
+{-|-}
+simpleFlag string =
+    CLI.Parser.flag 
+        string
+        { singular = string
+        , plural = string
+        , fn = (\val -> Just val)
+        , examples = []
+        }
+        string
+
+
+{-|-}
+cliConfig =
+    { name = "gren-turso-tests"
+    , version = "1.0.0"
+    , commands = 
+        CLI.Parser.defineGroup
+            |> CLI.Parser.withCommand
+                { word = "test"
+                , arguments = CLI.Parser.noArgs
+                , flags = 
+                    CLI.Parser.initFlags
+                        (\token_ group org ->
+                            { token = token_
+                            , group = group
+                            , org = org
+                            }
+                        )
+                        |> simpleFlag "token"
+                        |> simpleFlag "group"
+                        |> simpleFlag "org"
+                , commonDescription = Nothing
+                , summary = ""
+                , example = CLI.PrettyPrinter.empty
+                , builder = 
+                    (\_ flags ->
+                        flags
+                    )
+                }
+    , intro = CLI.PrettyPrinter.empty
+    , outro = CLI.PrettyPrinter.empty
+    }
+
+
+{-| The program that runs the tests
+-}
+main : Test.Runner.Effectful.Program a
+main =
+    Node.defineSimpleProgram <| \env ->
+        Init.await HttpClient.initialize (\httpClientPermission ->
+            let
+                cliResult =
+                    CLI.Parser.run 
+                        (Array.dropFirst 2 env.args)
+                        cliConfig
+            in
+            when cliResult is
+                CLI.Parser.Success { token = Just token, group = Just group, org = Just org } ->
+                    run env 
+                        (Tests.Turso.Platform.tests
+                            { httpPermission = httpClientPermission
+                            , token = token
+                            , group = group
+                            , org = org
+                            }
+                        )
+                _ ->
+                    -- If the parser fails, just run test that will fail
+                    -- TODO: Replace with some proper error message
+                    run env
+                        (describe "No tests run" [])
+        )

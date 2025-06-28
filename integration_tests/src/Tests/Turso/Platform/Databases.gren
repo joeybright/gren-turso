@@ -1,0 +1,529 @@
+module Tests.Turso.Platform.Databases exposing ( tests )
+
+{-|-}
+
+import Expect
+import Process
+import Test.Runner.Effectful exposing (Test, run, concat, describe, test, await, awaitError)
+import Turso.Platform
+import Turso.Platform.Databases
+import Turso.Db
+import HttpClient
+import Turso.Db.Decode
+import Turso.Db.Encode
+
+
+{-|-}
+type alias Configuration =
+    { randomUuid : String
+    , group : String
+    }
+
+
+{-|-}
+type alias NextConfiguration =
+    { databaseConnection : Turso.Db.Connection
+    , tableName : String
+    }
+
+
+{-|-}
+tests : Turso.Platform.Connection -> Configuration -> (NextConfiguration -> Test -> Test) -> Test
+tests connection { randomUuid, group } nextTests =
+    let
+        { httpPermission, accessToken, organizationSlug } =
+            connection
+
+        databaseName = 
+            "gren-test-db-" ++ randomUuid
+
+        nonExistantDatabaseName =
+            "randomdatabasenamethatshouldnotreallyexist"
+
+        nonExistantGroupName =
+            "randomgroupnamethatshouldnotexistreallyitshouldnotpleasedontmakeagroupofthisname"
+    in
+    describe "Tests for the `Turso.Platform.Database` module"
+        [ createTests
+            connection
+            { nonExistantGroupName = nonExistantGroupName
+            , databaseName = databaseName
+            , groupName = group
+            }
+            (\databaseResult ->
+                describe "Tests after creating a database"
+                    [ usageTests
+                        connection
+                        { nonExistantDatabaseName = nonExistantDatabaseName
+                        , databaseName = databaseName
+                        }
+                    , listTests 
+                        connection 
+                        { nonExistantGroupName = nonExistantGroupName
+                        , databaseName = databaseName
+                        }
+                    , statsTests
+                        connection
+                        { nonExistantDatabaseName = nonExistantDatabaseName
+                        , databaseName = databaseName
+                        }
+                    , retrieveTests
+                        connection
+                        { nonExistantDatabaseName = nonExistantDatabaseName
+                        , databaseName = databaseName
+                        , databaseResult = databaseResult
+                        }
+                    , createTokenTests 
+                        connection 
+                        { databaseName = databaseName
+                        , organizationSlug = organizationSlug
+                        , httpPermission = httpPermission
+                        }
+                        (\databaseConnection -> 
+                            describe "Tests after creating token to access database"
+                                [ nextTests
+                                    { databaseConnection = databaseConnection
+                                    , tableName = "test"
+                                    }
+                                    (concat
+                                        [ invalidateTokensTests
+                                            connection
+                                            { nonExistantDatabaseName = nonExistantDatabaseName
+                                            , databaseName = databaseName
+                                            }
+                                        , deleteTests 
+                                            connection 
+                                            { nonExistantDatabaseName = nonExistantDatabaseName 
+                                            , databaseName = databaseName
+                                            }
+                                        ]
+                                    )
+                                ]
+                        )
+                    ]
+            )
+        ]
+
+
+{-|-}
+type alias ListTestsConfiguration =
+    { nonExistantGroupName : String
+    , databaseName : String
+    }
+
+
+{-|-}
+listTests : Turso.Platform.Connection -> ListTestsConfiguration -> Test
+listTests connection { nonExistantGroupName, databaseName } =
+    describe "Tests for the `Turso.Platform.Databases.list` function"
+        [ await
+            (Turso.Platform.Databases.list
+                connection
+                { groupName = Nothing
+                , parentDbId = Nothing
+                }
+            )
+            "Await listing databases"
+            (\databaseListResponse ->
+                describe "Tests after getting the database list"
+                    [ test "The newly created database is in the retrived list of databases"
+                        (\_ ->
+                            databaseListResponse.data
+                                |> Array.foldl
+                                    (\{ name } acc ->
+                                        if acc == True then
+                                            True 
+                                        else if name == databaseName then
+                                            True
+                                        else
+                                            False
+                                    )
+                                    False
+                                |> Expect.equal True
+                        )
+                    ]
+            )
+        , awaitError
+            (Turso.Platform.Databases.list
+                connection 
+                { groupName = Just nonExistantGroupName
+                , parentDbId = Nothing
+                }
+            )
+            "Awaiting getting a list of databases from a group that does not exist"
+            (\res ->
+                test "The returned type is expected when getting a list of database from a group that does not exist"
+                    (\_ ->
+                        Expect.equal res Turso.Platform.Databases.ListErrorGroupNotFound
+                    )
+            )
+        , await
+            (Turso.Platform.Databases.list
+                connection 
+                { groupName = Nothing
+                , parentDbId = Just "grjeghregahgkjhrgkehgkehragrger"
+                }
+            )
+            "Awaiting getting a list of databases from a parent that does not exist"
+            (\res ->
+                describe "Tests after getting a list of database from a parent that does not exist"
+                    [ test "The returned value is an empty list"
+                        (\_ ->
+                            Expect.equal res.data []
+                        )
+                    , test "The returned status code is 200"
+                        (\_ ->
+                            Expect.equal res.statusCode 200
+                        )
+                    ]
+            )
+        , awaitError
+            (Turso.Platform.Databases.list
+                connection 
+                { groupName = Just nonExistantGroupName
+                , parentDbId = Just "grjeghregahgkjhrgkehgkehragrger"
+                }
+            )
+            "Awaiting getting a list of databases from a parent and group that does not exist"
+            (\res ->
+                test "The returned type is expected when getting a list of database from a parent that does not exist"
+                    (\_ ->
+                        Expect.equal res Turso.Platform.Databases.ListErrorGroupNotFound
+                    )
+            )
+        ]
+
+
+{-|-}
+type alias CreateTestsConfiguration =
+    { nonExistantGroupName : String
+    , databaseName : String
+    , groupName : String
+    }
+
+
+{-|-}
+createTests : Turso.Platform.Connection -> CreateTestsConfiguration -> (HttpClient.Response Turso.Platform.Databases.CreateResult -> Test) -> Test
+createTests connection { nonExistantGroupName, databaseName, groupName } nextTests =
+    describe "Tests for the `Turso.Platform.Databases.create` function"
+        [ awaitError
+            (Turso.Platform.Databases.create
+                connection
+                { databaseName = databaseName
+                , group = nonExistantGroupName
+                }
+            )
+            "Awaiting database creation with a group that does not exist"
+            (\err ->
+                test "The returned type is expected when trying to create a database in a group that does not exist"
+                    (\_ ->
+                        Expect.equal err Turso.Platform.Databases.CreateErrorGroupNotFound
+                    )
+            )
+        , await
+            (Turso.Platform.Databases.create
+                connection
+                { databaseName = databaseName
+                , group = groupName
+                }
+            )
+            "Awaiting database creation"
+            (\databaseResult ->
+                describe "Tests after creating a database"
+                    [ test "The created name equals the name passed"
+                        (\_ ->
+                            Expect.equal databaseResult.data.databaseName databaseName
+                        )
+                    , awaitError
+                        (Turso.Platform.Databases.create
+                            connection
+                            { databaseName = databaseName
+                            , group = groupName
+                            }
+                        )
+                        "Awaiting duplicate database creation"
+                        (\err ->
+                            test "The returned type is expected when trying to create a database that already exists"
+                                (\_ ->
+                                    Expect.equal err Turso.Platform.Databases.CreateErrorDatabaseAlreadyExists
+                                )
+                        )
+                    , describe "Next tests after creating a database"
+                        [ nextTests databaseResult
+                        ]
+                    ]
+            )
+        ]
+
+
+{-|-}
+type alias CreateTokenTestsConfiguration =
+    { databaseName : String
+    , organizationSlug : String
+    , httpPermission : HttpClient.Permission
+    }
+
+
+{-|-}
+createTokenTests : Turso.Platform.Connection -> CreateTokenTestsConfiguration -> (Turso.Db.Connection -> Test) -> Test
+createTokenTests connection { httpPermission, databaseName, organizationSlug } nextTests =
+    describe "Tests for the `Turso.Platform.Databases.createToken` function"
+        [ await
+            (Turso.Platform.Databases.createToken
+                connection
+                { databaseName = databaseName
+                , expiration = Nothing
+                , authorization = Just Turso.Platform.Databases.FullAccess
+                , permissions = 
+                    { readAttachDatabases = []
+                    }
+                }
+            )
+            "Await token creation for the database"
+            (\createdToken ->
+                let
+                    databaseConnection : Turso.Db.Connection
+                    databaseConnection =
+                        { httpPermission = httpPermission
+                        , accessToken = createdToken.data.jwt
+                        , organizationSlug = organizationSlug
+                        , databaseName = databaseName
+                        , locationUrl = "aws-us-west-2"
+                        }
+                in
+                nextTests databaseConnection
+            )
+        ]
+
+
+{-|-}
+type alias InvalidateTokensConfiguration =
+    { nonExistantDatabaseName : String
+    , databaseName : String
+    }
+
+
+{-|-}
+invalidateTokensTests : Turso.Platform.Connection -> InvalidateTokensConfiguration -> Test
+invalidateTokensTests connection { nonExistantDatabaseName, databaseName } =
+    describe "Tests for the `Turso.Platform.Databases.invalidateTokens` function"
+        [ awaitError
+            (Turso.Platform.Databases.invalidateTokens
+                connection
+                { databaseName = nonExistantDatabaseName
+                }
+            )
+            "Awaiting invaliding tokens for a database that does not exist"
+            (\err ->
+                test "The returned type is expected when invalidating tokens for a database that does not exist"
+                    (\_ ->
+                        Expect.equal err Turso.Platform.Databases.InvalidateTokensErrorDatabaseNotFound
+                    )
+            )
+        , await
+            (Turso.Platform.Databases.invalidateTokens
+                connection
+                { databaseName = databaseName
+                }
+            )
+            "Awaiting invaliding the created token"
+            (\res ->
+                test "When invalidating tokens, the returned result is an empty record"
+                    (\_ ->
+                        Expect.equal res.data {}
+                    )
+            )
+        ]
+
+
+{-|-}
+type alias RetrieveTestConfiguration =
+    { nonExistantDatabaseName : String
+    , databaseName : String
+    , databaseResult : HttpClient.Response Turso.Platform.Databases.CreateResult
+    }
+
+
+{-|-}
+retrieveTests : Turso.Platform.Connection -> RetrieveTestConfiguration -> Test
+retrieveTests connection { databaseName, nonExistantDatabaseName, databaseResult }=
+    describe "Tests for the `Turso.Platform.Databases.retrieve` function"
+        [ awaitError
+            (Turso.Platform.Databases.retrieve
+                connection
+                { databaseName = nonExistantDatabaseName
+                }
+            )
+            "Awaiting retrieving a database that should not exist"
+            (\err ->
+                describe "Tests after retrieving the database"
+                    [ test "The returned type is expected when retrieving a database that does not exist"
+                        (\_ ->
+                            Expect.equal err Turso.Platform.Databases.RetrieveErrorDatabaseNotFound
+                        )
+                    ]
+            )
+        , await 
+            (Turso.Platform.Databases.retrieve
+                connection
+                { databaseName = databaseName
+                }
+            )
+            "Awaiting retrieving the newly created database"
+            (\retrievedDatabase ->
+                describe "Tests after retrieving the database"
+                    [ test "The retrieved database id matches the originally created database id"
+                        (\_ ->
+                            Expect.equal retrievedDatabase.data.databaseId databaseResult.data.databaseId
+                        )
+                    , test "The retrieved database name matches the generated database name"
+                        (\_ ->
+                            Expect.equal retrievedDatabase.data.name databaseName 
+                        )
+                    ]
+            )
+        ]
+
+
+{-|-}
+type alias StatsTestConfiguration =
+    { databaseName : String
+    , nonExistantDatabaseName : String
+    }
+
+
+{-|-}
+statsTests : Turso.Platform.Connection -> StatsTestConfiguration -> Test
+statsTests connection { nonExistantDatabaseName, databaseName } =
+    describe "Tests for the `Turso.Platform.Databases.stats` function"
+        [ awaitError
+            (Turso.Platform.Databases.stats
+                connection
+                { databaseName = nonExistantDatabaseName
+                }
+            )
+            "Awaiting getting stats for a database that does not exist"
+            (\err ->
+                test "The returned type is expected when getting stats for a database that does not exist"
+                    (\_ ->
+                        Expect.equal err Turso.Platform.Databases.StatsErrorDatabaseNotFound
+                    )
+            )
+        , awaitError
+            (Turso.Platform.Databases.stats
+                connection
+                { databaseName = databaseName
+                }
+            )
+            "Awaiting getting stats for the created database"
+            (\err ->
+                test "Fails to get stats for the created database with server error 500"
+                    (\_ ->
+                        when err is
+                            Turso.Platform.Databases.StatsHttpError (HttpClient.BadStatus { statusCode = 400 }) ->
+                                Expect.pass
+
+                            _ ->
+                                Expect.fail "Did not fail with the correct status code"
+                    )
+            )
+        ]
+
+
+{-|-}
+type alias UsageTestsConfiguration =
+    { databaseName : String
+    , nonExistantDatabaseName : String
+    }
+
+
+{-|-}
+usageTests : Turso.Platform.Connection -> UsageTestsConfiguration -> Test
+usageTests connection { databaseName, nonExistantDatabaseName } =
+    describe "Tests for the `Turso.Platform.Databases.usage` function"
+        [ awaitError
+            (Turso.Platform.Databases.usage
+                connection
+                { databaseName = nonExistantDatabaseName
+                , from = Nothing
+                , to = Nothing
+                }
+            )
+            "Awaiting getting usage for a database that doesn't exist"
+            (\err ->
+                test "The returned type is expected when trying to get database usage from a database that doesn't exist"
+                    (\_ ->
+                        Expect.equal err Turso.Platform.Databases.UsageErrorDatabaseNotFound
+                    )
+            )
+        , await
+            (Turso.Platform.Databases.usage
+                connection
+                { databaseName = databaseName
+                , from = Nothing
+                , to = Nothing
+                }
+            )
+            "Awaiting getting usage for the created database"
+            (\res ->
+                test "Successfully retrieves usage"
+                    (\_ ->
+                        Expect.pass
+                    )
+            )
+        , awaitError
+            (Turso.Platform.Databases.usage
+                connection
+                { databaseName = databaseName
+                , from = Just "invalid"
+                , to = Just "another invalid string"
+                }
+            )
+            "Awaiting getting usage for the created database with incorrect parameters"
+            (\err ->
+                test "The returned type is expected when trying to get database usage with invalid parameters"
+                    (\_ ->
+                        Expect.equal err Turso.Platform.Databases.UsageErrorInvalidQueryParameter
+                    )
+            )
+        ]
+
+
+{-|-}
+type alias DeleteTestConfiguration =
+    { databaseName : String
+    , nonExistantDatabaseName : String
+    }
+
+
+{-|-}
+deleteTests : Turso.Platform.Connection -> DeleteTestConfiguration -> Test
+deleteTests connection { databaseName, nonExistantDatabaseName} =
+    describe "Tests for the `Turso.Platform.Databases.delete` function"
+        [ awaitError
+            (Turso.Platform.Databases.delete
+                connection
+                { databaseName = nonExistantDatabaseName
+                }
+            )
+            "Await removing a database that should not exist"
+            (\err ->
+                test "The returned type is expected when deleting a database that does not exist"
+                    (\_ ->
+                        Expect.equal err Turso.Platform.Databases.DeleteErrorDatabaseNotFound
+                    )
+            )
+        , await
+            (Turso.Platform.Databases.delete
+                connection
+                { databaseName = databaseName
+                }
+            )
+            "Await removing the created test database"
+            (\deleteDatabaseResult ->
+                test "The deleted database name equals the name passed"
+                    (\_ ->
+                        Expect.equal deleteDatabaseResult.data.databaseName databaseName
+                    )
+            )
+        ]

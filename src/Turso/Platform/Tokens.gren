@@ -1,0 +1,233 @@
+module Turso.Platform.Tokens exposing 
+    ( ListArgs, ListResult, list
+    , CreateArgs, CreateResult, create
+    , ValidateArgs, ValidateResult, validate
+    , RevokeArgs, RevokeResult, revoke
+    )
+
+{-| Manage tokens in Turso.
+
+This module does not use a `Turso.Platform.Connection`. The functions here are
+for manipulating tokens for a user, who is identified with the access token
+passed to each of these functions.
+
+## List Tokens
+
+@docs ListArgs, ListResult, list
+
+## Create Tokens
+
+@docs CreateArgs, CreateResult, create
+
+## Validate Tokens
+
+@docs ValidateArgs, ValidateResult, validate
+
+## Revoke tokens
+
+@docs RevokeArgs, RevokeResult, revoke
+-}
+
+import HttpClient
+import Json.Decode
+import Task exposing (Task)
+import HttpServer
+
+
+{-| The result of creating a new Turso platform API token.
+
+- `name` is the name of the created token.
+- `id` is the unique id for the created token.
+- `token` is the token itself. This should not be saved unsafely or shared 
+publicly!
+-}
+type alias CreateResult =
+    { name : String
+    , id : String
+    , token : String
+    }
+
+
+{-|-}
+createResultDecoder : Json.Decode.Decoder CreateResult
+createResultDecoder =
+    Json.Decode.map3
+        (\name id token ->
+            { name = name
+            , id = id
+            , token = token
+            }
+        )
+        (Json.Decode.field "name" Json.Decode.string)
+        (Json.Decode.field "id" Json.Decode.string)
+        (Json.Decode.field "token" Json.Decode.string)
+
+
+{-| Arguments needed for the `create` function.
+
+- `permission` is the `HttpClient.Permission` required to make an HTTP request.
+- `token` is the token used to identify the user who you want to create a new
+token for.
+- `createdTokenName` is the name you want to give to the created token.
+-}
+type alias CreateArgs =
+    { permission : HttpClient.Permission
+    , token : String
+    , createdTokenName : String
+    }
+
+
+{-| Create a new Turso platform API token. 
+
+The resulting token should not be saved unsafely or shared publicly.
+-}
+create : CreateArgs -> Task (HttpClient.Error CreateResult) (HttpClient.Response CreateResult)
+create { permission, token, createdTokenName } =
+    HttpClient.post ("https://api.turso.tech/v1/auth/api-tokens/" ++ createdTokenName)
+        |> HttpClient.withHeader "Authorization" ("Bearer " ++ token)
+        |> HttpClient.expectJson createResultDecoder
+        |> HttpClient.send permission
+
+
+{-| The result of validating an API token.
+
+- `exp` is the expiration time (in unix epoch time) that the token expires.
+-}
+type alias ValidateResult =
+    { exp : Int
+    }
+
+
+{-|-}
+validateResultDecoder : Json.Decode.Decoder ValidateResult
+validateResultDecoder =
+    Json.Decode.map
+        (\exp ->
+            { exp = exp
+            }
+        )
+        (Json.Decode.field "exp" Json.Decode.int)
+
+
+{-| Arguments needed for the `validate` function.
+
+- `permission` is the `HttpClient.Permission` required to make an HTTP request.
+- `token` is the token you want to validate. This must be the actual token and 
+not the token name or id.
+-}
+type alias ValidateArgs =
+    { permission : HttpClient.Permission
+    , token : String
+    }
+
+
+{-| Validate an API token beloning to a user.
+-}
+validate : ValidateArgs -> Task (HttpClient.Error ValidateResult) (HttpClient.Response ValidateResult)
+validate { permission, token } =
+    HttpClient.get ("https://api.turso.tech/v1/auth/validate")
+        |> HttpClient.withHeader "Authorization" ("Bearer " ++ token)
+        |> HttpClient.expectJson validateResultDecoder
+        |> HttpClient.send permission
+
+
+{-| The result of listing all tokens.
+
+- `tokens` are all of the tokens for the user. This only specifies the token 
+`name` and `id` and does not reveal the token itself.
+-}
+type alias ListResult =
+    { tokens :
+        Array 
+            { name : String
+            , id : String 
+            }
+    }
+
+
+{-|-}
+listResultDecoder : Json.Decode.Decoder ListResult
+listResultDecoder =
+    Json.Decode.map
+        (\tokens -> 
+            { tokens = tokens
+            }
+        )
+        (Json.Decode.field "tokens"
+            (Json.Decode.array
+                (Json.Decode.map2
+                    (\name id ->
+                        { name = name
+                        , id = id
+                        }
+                    )
+                    (Json.Decode.field "name" Json.Decode.string)
+                    (Json.Decode.field "id" Json.Decode.string)
+                )
+            )
+        )
+
+
+{-| Arguments needed for the `list` function.
+
+- `permission` is the `HttpClient.Permission` required to make an HTTP request.
+- `token` is the token used to identify the user whose tokens you want to list.
+-}
+type alias ListArgs =
+    { permission : HttpClient.Permission
+    , token : String
+    }
+
+
+{-| List all Turso platform API tokens belonging to the user.
+-}
+list : ListArgs -> Task (HttpClient.Error ListResult) (HttpClient.Response ListResult)
+list { permission, token } =
+    HttpClient.get ("https://api.turso.tech/v1/auth/api-tokens")
+        |> HttpClient.withHeader "Authorization" ("Bearer " ++ token)
+        |> HttpClient.expectJson listResultDecoder
+        |> HttpClient.send permission
+
+
+{-| The result of revoking a token.
+
+- `tokenName` is the name of the revoked token. This should match the name given 
+to the `revoke` function.
+-}
+type alias RevokeResult =
+    { tokenName : String
+    }
+
+
+{-|-}
+revokeResultDecoder : Json.Decode.Decoder RevokeResult
+revokeResultDecoder =
+    Json.Decode.map
+        (\token ->
+            { tokenName = token
+            }
+        )
+        (Json.Decode.field "token" Json.Decode.string)
+
+
+{-| Arguments needed for the `revoke` function.
+
+- `permission` is the `HttpClient.Permission` required to make an HTTP request.
+- `token` is the token used to identify the user whose token you want to revoke.
+- `tokenNameToRevoke` is the name of the token you want to revoke.
+-}
+type alias RevokeArgs =
+    { permission : HttpClient.Permission
+    , token : String
+    , tokenNameToRevoke : String 
+    }
+
+
+{-| Revoke a token.
+-}
+revoke : RevokeArgs -> Task (HttpClient.Error RevokeResult) (HttpClient.Response RevokeResult)
+revoke { permission, tokenNameToRevoke, token} =
+    HttpClient.request HttpServer.DELETE ("https://api.turso.tech/v1/auth/api-tokens/" ++ tokenNameToRevoke)
+        |> HttpClient.withHeader "Authorization" ("Bearer " ++ token)
+        |> HttpClient.expectJson revokeResultDecoder
+        |> HttpClient.send permission

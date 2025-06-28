@@ -1,0 +1,558 @@
+module Turso.Db exposing 
+    ( Connection
+    , execute, transaction
+    , getAll, getMaybeOne, getOne
+    , Query, Statement
+    , Result, Data
+    )
+
+{-| Module for configuring access to a specific Turso database and sending
+SQL to it.
+
+## Connecting to a Database
+
+@docs Connection
+
+## Run Statements
+
+@docs Statement
+
+@docs execute, transaction
+
+## Run Queries
+
+@docs Query
+
+@docs getAll, getOne, getMaybeOne
+
+## Getting Results
+
+@docs Result, Data
+-}
+
+import Task exposing ( Task )
+import HttpClient
+import Json.Encode
+import Json.Decode
+import Turso.Db.Encode
+import Url.Builder
+import Turso.Db.Decode
+import Dict
+
+
+{-| A `Connection` is required to make any requests to a Turso database.
+
+- `httpPermission` allows functions using this `Connection` can make HTTP requests.
+- `accessToken` is the token used to make requests to the specific database. A new 
+token can be created using the `Turso.Platform.Databases.createToken` function, or 
+be retrieved from the Turso account dashboard. This token is specific to the database 
+you're attempting to access and is different than the token needed to access the 
+Turso platform API.
+- `organizationSlug` is the slug of the organization the database you
+want to query resides in.
+- `databaseUrl` is the name of the database you want to connect and send 
+queries to.
+- `locationUrl` is the location of the database, used to construct the correct
+URL. For example `aws-us-west-2` is a valid location.
+-}
+type alias Connection =
+    { httpPermission : HttpClient.Permission
+    , accessToken : String
+    , organizationSlug : String
+    , databaseName : String
+    , locationUrl : String
+    }
+
+
+{-| A query runs some SQL that expects some (one or more) result back.
+
+When inserting dynamic values into a query, it's highly recommended to use
+parameters instead of adding them manually to the query string.
+-}
+type alias Query a =
+    { query : String
+    , parameters : Array Turso.Db.Encode.Value
+    , decoder : Turso.Db.Decode.Decoder a
+    }
+
+
+{-| A statement runs some SQL that does not expect any data back.
+
+When inserting dynamic values into a statement, it's highly recommended to use
+parameters instead of adding them manually to the statement string.
+-}
+type alias Statement =
+    { statement : String
+    , parameters : Array Turso.Db.Encode.Value
+    }
+
+
+{-| The result of a single query sent to Turso.
+
+- `baton` is a value that is not used in this module. If supported in the future,
+it'd allow for multiple queries or statements to be run using the same database
+connection.
+- `data` is the data result of running the query. These are captured by the
+`Data a` type in this module.
+-}
+type alias Result a =
+    { baton : Maybe String
+    , result : a
+    }
+
+
+{-| The data returned from a query or statement sent to the database.
+
+- `affectedRowCount` will return the amount of rows affected by the query or 
+statement. For example, if you run the `execute` function with a `DELETE` 
+statement, the returned `affectedRowcount` would indicate the number of rows 
+deleted.
+- `lastInsertedRowId` will return the id of the last inserted row. This id is
+the Turso internal representation of the row that was inserted. This will be
+`Nothing` if no rows were inserted as part of the query.
+- `data` is the data that was decoded from the given query. If you are running 
+statements (using `execute` or `transaction`), no data will be returned.
+-}
+type alias Data a =
+    { affectedRowCount : Int
+    , lastInsertRowId : Maybe String
+    , data : a
+    }
+
+
+{-| Construct the Turso API endpoint from a `Connection`.
+-}
+tursoUrl : Connection -> String
+tursoUrl { databaseName, organizationSlug, locationUrl } =
+    Url.Builder.crossOrigin
+        ("https://" ++ databaseName ++ "-" ++ organizationSlug ++ "." ++ locationUrl ++ ".turso.io")
+        [ "v2", "pipeline" ]
+        []
+
+
+{-| Encode the arguments for a query.
+-}
+queryArgsEncoder : Array Turso.Db.Encode.Value -> Json.Encode.Value
+queryArgsEncoder args =
+    args
+        |> Array.map Turso.Db.Encode.unwrap
+        |> Json.Encode.array 
+            (\item ->
+                Json.Encode.object 
+                    [ { key = "name", value = Json.Encode.string item.key }
+                    , { key = "value", value = 
+                          Json.Encode.object
+                              [ { key = "type", value = Json.Encode.string item.type_ }
+                              , { key = "value", value = item.value }
+                              ] 
+                      }
+                    ]
+            )
+
+
+{-| Encode a single SQL statement .
+-}
+statementEncoder : Query a -> Json.Encode.Value
+statementEncoder { query, parameters } =
+    Json.Encode.object
+        [ { key = "sql", value = Json.Encode.string query }
+        , { key = "named_args", value = queryArgsEncoder parameters }
+        ]
+
+
+{-| Encode a series of SQL statements that are sent to Turso.
+-}
+statementsEncoder : Array Statement -> Json.Encode.Value
+statementsEncoder queries =
+    Json.Encode.object
+        [ { key = "requests"
+          , value = 
+                Json.Encode.array
+                    (\{ statement, parameters } -> 
+                        Json.Encode.object
+                            [ { key = "type", value = Json.Encode.string "execute" }
+                            , { key = "stmt", value = 
+                                Json.Encode.object
+                                    [ { key = "sql", value = Json.Encode.string statement }
+                                    , { key = "named_args", value = queryArgsEncoder parameters }
+                                    ]
+                              }
+                            ]
+                    )
+                    queries
+          }
+        ]
+
+
+{-| Deocdes query Data from Turso.
+
+Accepts a function that maps over decoded Data to transform them into whatever value 
+is necessary by the calling function. Also accepts a decoder which decodes the variable
+data expected to be returned from the given SQL queries.
+-}
+queryDecoder : (Array (Data a) -> Json.Decode.Decoder b) -> Json.Decode.Decoder a -> Json.Decode.Decoder (Result b)
+queryDecoder mapFunc decoder =
+    Json.Decode.map3
+        (\baton baseUrl data ->
+            { baton = baton
+            -- `baseUrl` is commented out given, in testing, it's not often returned.
+            -- Can be added in future versions of the package.
+            -- , baseUrl = baseUrl 
+            , result = data
+            }
+        )
+        (Json.Decode.field "baton" (Json.Decode.maybe Json.Decode.string))
+        (Json.Decode.field "base_url" (Json.Decode.maybe Json.Decode.string))
+        (Json.Decode.field "results"
+            (Json.Decode.andThen mapFunc
+                (Json.Decode.array
+                    (Json.Decode.map
+                        (\response ->
+                            { affectedRowCount = response.affectedRowCount
+                            , lastInsertRowId = response.lastInsertRowId
+                            , data = response.row
+                            }
+                        )
+                        (Json.Decode.field "response"
+                            (Json.Decode.map
+                                (\result ->
+                                    { result = result
+                                    , affectedRowCount = result.affectedRowCount
+                                    , lastInsertRowId = result.lastInsertRowId
+                                    , row = result.row
+                                    }
+                                )
+                                (Json.Decode.field "result"
+                                    (Json.Decode.andThen
+                                        (\{ res, lastInsertRowId, affectedRowCount } ->
+                                            when Json.Decode.decodeValue decoder res is
+                                                Ok res_ ->
+                                                    Json.Decode.succeed 
+                                                        { lastInsertRowId = lastInsertRowId
+                                                        , affectedRowCount = affectedRowCount
+                                                        , row = res_ 
+                                                        }
+                                                
+                                                Err _ ->
+                                                    Json.Decode.fail "Could not decode rows with passed decoder."
+                                        )
+                                        (Json.Decode.map4
+                                            (\cols rows affectedRowCount lastInsertRowId ->
+                                                let
+                                                    res =
+                                                        Array.map
+                                                            (\row ->
+                                                                Array.foldl 
+                                                                    (\{ key, value } -> 
+                                                                        Dict.set key value
+                                                                    )
+                                                                    Dict.empty
+                                                                    (Array.map2
+                                                                        (\col rowItem ->
+                                                                            { key = col, value = rowItem }
+                                                                        )
+                                                                        (Array.map (\a -> a.name) cols)
+                                                                        row
+                                                                    )
+                                                            )
+                                                            (Array.map (Array.map (\b -> b.value)) rows)
+                                                            |> Json.Encode.array (Json.Encode.dict identity identity)
+                                                in
+                                                { affectedRowCount = affectedRowCount
+                                                , lastInsertRowId = lastInsertRowId
+                                                , res = res
+                                                }
+                                            )
+                                            (Json.Decode.field "cols" 
+                                                (Json.Decode.array
+                                                    (Json.Decode.map2
+                                                        (\name type_ ->
+                                                            { name = name
+                                                            , type_ = type_
+                                                            }
+                                                        )
+                                                        (Json.Decode.field "name" Json.Decode.string)
+                                                        (Json.Decode.field "decltype" Json.Decode.string)
+                                                    )
+                                                )
+                                            )
+                                            (Json.Decode.field "rows" 
+                                                (Json.Decode.array 
+                                                    (Json.Decode.array
+                                                        (Json.Decode.map2
+                                                            (\type_ value ->
+                                                                { type_ = type_
+                                                                , value = value
+                                                                }
+                                                            )
+                                                            (Json.Decode.field "type" Json.Decode.string)
+                                                            (Json.Decode.field "value" Json.Decode.value)
+                                                        )
+                                                    )
+                                                )
+                                            )
+                                            (Json.Decode.field "affected_row_count" Json.Decode.int)
+                                            (Json.Decode.field "last_insert_rowid" (Json.Decode.maybe Json.Decode.string))
+                                        )
+                                    )
+                                )
+                            )
+                        )
+                    )
+                )
+            )
+        )
+        
+
+{-| Wraps `queryDecoder` to only succeed decoding when there is at least
+one result.
+
+This only cares if there is a single query result; should always succeed
+as long as the query has a single statement.
+-}
+queryDecoderSingleResult : Json.Decode.Decoder a -> Json.Decode.Decoder (Result (Data a))
+queryDecoderSingleResult =
+    let
+        func resultingArray =
+            when Array.first resultingArray is
+                Just result ->
+                    Json.Decode.succeed result
+
+                Nothing ->
+                    Json.Decode.fail "Malformed result"
+    in
+    queryDecoder func
+
+
+{-| Wraps `queryDecoder` to only succeed decoding when there is a single 
+result.
+-}
+queryDecoderJustOneResult : Json.Decode.Decoder (Array a) -> Json.Decode.Decoder (Result (Data a))
+queryDecoderJustOneResult =
+    let
+        func resultingArray =
+            when Array.first resultingArray is
+                Just result ->
+                    when Array.first result.data is
+                        Just value ->
+                            if Array.length result.data == 1 then
+                                Json.Decode.succeed
+                                    { affectedRowCount = result.affectedRowCount
+                                    , lastInsertRowId = result.lastInsertRowId
+                                    , data = value 
+                                    }
+                            
+                            else
+                                Json.Decode.fail ""
+
+                        Nothing ->
+                            Json.Decode.fail ""
+
+                Nothing ->
+                    Json.Decode.fail ""
+    in
+    queryDecoder func
+
+
+{-| Wraps `queryDecoder` to always succeed decoding when there is a single
+result, but succeed with `Nothing` if there is not.
+-}
+queryDecoderMaybeOneResult : Json.Decode.Decoder (Array a) -> Json.Decode.Decoder (Result (Maybe (Data a)))
+queryDecoderMaybeOneResult =
+    let
+        func resultingArray =
+            when Array.first resultingArray is
+                Just result ->
+                    when Array.first result.data is
+                        Just value ->
+                            if Array.length result.data == 1 then
+                                Json.Decode.succeed 
+                                    (Just 
+                                        { affectedRowCount = result.affectedRowCount
+                                        , lastInsertRowId = result.lastInsertRowId
+                                        , data = value 
+                                        }
+                                    )
+                            
+                            else
+                                Json.Decode.succeed Nothing
+
+                        Nothing ->
+                            Json.Decode.succeed Nothing
+
+                Nothing ->
+                    Json.Decode.succeed Nothing
+    in
+    queryDecoder func
+
+
+{-| Run a query that should return exactly one result. If this query returns zero
+or more than one result, it will fail.
+
+    Turso.Db.getAll
+        { query = "SELECT * FROM users WHERE id = :id"
+        , parameters = 
+            [ Turso.Db.Encode.string "id" "b185015c-a954-48e1-b92d-c9407ee554bd"
+            ]
+        , decoder = 
+            Turso.Db.Decode.map
+                (\name ->
+                    { name = name
+                    }
+                )
+                (Turso.Db.Decode.string "name")
+        }
+-}
+getOne : Connection -> Query a -> Task (HttpClient.Error (Result (Data a))) (HttpClient.Response (Result (Data a)))
+getOne connection { query, parameters, decoder } =
+    let
+        statement =
+            { statement = query
+            , parameters = parameters
+            }
+    in
+    internalTransaction connection 
+        { prepareDecoder = (\a -> queryDecoderJustOneResult (Json.Decode.array a))
+        , prepareEncoder = statementsEncoder
+        , dataDecoder = decoder
+        }
+        [ statement ]
+
+
+{-| Run a query that should have zero or one results. If this query returns zero
+or more than one result, it will fail.
+
+    Turso.Db.getMaybeOne
+        { query = "SELECT * FROM users WHERE name = :user_name AND id = :user_id"
+        , parameters = 
+            [ Turso.Db.Encode.string "user_name" "Jane"
+            , Turso.Db.Encode.string "user_id" "300b989b-7549-4753-8495-49c613e83c88"
+            ]
+        , decoder = 
+            Turso.Db.Decode.map2
+                (\user_name user_id ->
+                    { name = user_name
+                    , id = user_id
+                    }
+                )
+                (Turso.Db.Decode.string "name")
+                (Turso.Db.Decode.string "id")
+        }
+-}
+getMaybeOne : Connection -> Query a -> Task (HttpClient.Error (Result (Maybe (Data a)))) (HttpClient.Response (Result (Maybe (Data a))))
+getMaybeOne connection { query, parameters, decoder } =
+    let
+        statement =
+            { statement = query
+            , parameters = parameters
+            }
+    in
+    internalTransaction connection 
+        { prepareDecoder = (\a -> queryDecoderMaybeOneResult (Json.Decode.array a))
+        , prepareEncoder = statementsEncoder
+        , dataDecoder = decoder
+        }
+        [ statement ]
+
+
+{-| Get all of the resulting rows from a `Query`.
+
+    Turso.Db.getMaybeOne
+        { query = "SELECT * FROM users WHERE name = :user_name"
+        , parameters = 
+            [ Turso.Db.Encode.string "user_name" "John"
+            ]
+        , decoder = 
+            Turso.Db.Decode.map2
+                (\user_name user_id ->
+                    { name = user_name
+                    , id = user_id
+                    }
+                )
+                (Turso.Db.Decode.string "name")
+                (Turso.Db.Decode.string "id")
+        }
+-}
+getAll : Connection -> Query a -> Task (HttpClient.Error (Result (Data (Array a)))) (HttpClient.Response (Result (Data (Array a))))
+getAll connection { query, parameters, decoder } =
+    let
+        statement =
+            { statement = query
+            , parameters = parameters
+            }
+    in
+    internalTransaction connection 
+        { prepareDecoder = (\a -> queryDecoderSingleResult (Json.Decode.array a))
+        , prepareEncoder = statementsEncoder
+        , dataDecoder = decoder
+        }
+        [ statement ]
+
+
+{-| Execute a single SQL statement.
+
+    Turso.Db.execute connection
+        { statement = "INSERT INTO users (id, name) VALUES (:user_id, :user_name)"
+        , parameters = 
+            [ Turso.Db.Encode.int "user_id" 1
+            , Turso.Db.Encode.string "user_name" "one"
+            ]
+        }
+-}
+execute : Connection -> Statement -> Task (HttpClient.Error (Result (Data {}))) (HttpClient.Response (Result (Data {})))
+execute connection statement =
+    internalTransaction connection 
+        { prepareDecoder = queryDecoderSingleResult
+        , prepareEncoder = statementsEncoder
+        , dataDecoder = Turso.Db.Decode.succeed {}
+        }
+        [ statement ]
+
+
+{-| Execute an `Array` of sql statements in a single request.
+
+    Turso.Db.transaction connection
+        [ { statement = "INSERT INTO users (id, name) VALUES (:user_id, :user_name)"
+          , parameters = 
+            [ Turso.Db.Encode.int "user_id" 1
+            , Turso.Db.Encode.string "user_name" "one"
+            ]
+          }
+        , { statement = "INSERT INTO users (id, name) VALUES (:user_id, :user_name)"
+          , parameters =
+            [ Turso.Db.Encode.int "user_id" 2
+            , Turso.Db.Encode.string "user_name" "two"
+            ]
+          }
+        ]
+-}
+transaction : Connection -> Array Statement ->  Task (HttpClient.Error (Result (Array (Data {})))) (HttpClient.Response (Result (Array (Data {}))))
+transaction connection =
+    internalTransaction connection 
+        { prepareDecoder = queryDecoder Json.Decode.succeed
+        , prepareEncoder = statementsEncoder
+        , dataDecoder = Turso.Db.Decode.succeed {}
+        }
+
+
+{-| Parameters needed for a generic transaction.
+-}
+type alias TransactionParams a b =
+    { prepareDecoder : Json.Decode.Decoder a -> Json.Decode.Decoder b
+    , prepareEncoder : Array Statement -> Json.Encode.Value
+    , dataDecoder : Turso.Db.Decode.Decoder a
+    }
+
+
+{-|-}
+internalTransaction : Connection -> TransactionParams a b -> Array Statement ->  Task (HttpClient.Error b) (HttpClient.Response b)
+internalTransaction connection { prepareDecoder, prepareEncoder, dataDecoder } statements =
+    let
+        { accessToken, httpPermission } =
+            connection
+    in
+    HttpClient.post (tursoUrl connection)
+        |> HttpClient.withJsonBody (prepareEncoder statements)
+        |> HttpClient.expectJson (prepareDecoder (Turso.Db.Decode.unwrap dataDecoder))
+        |> HttpClient.withHeader "Authorization" ("Bearer " ++ accessToken)
+        |> HttpClient.send httpPermission

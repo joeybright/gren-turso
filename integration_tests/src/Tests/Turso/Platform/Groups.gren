@@ -1,0 +1,107 @@
+module Tests.Turso.Platform.Groups exposing ( tests )
+
+{-|-}
+
+import Expect
+import Test.Runner.Effectful exposing (Test, run, describe, test, await, awaitError)
+import Turso.Platform
+import Turso.Platform.Groups
+
+
+{-|-}
+tests : Turso.Platform.Connection -> String -> Test
+tests tursoPlatformConnection groupName = 
+    describe "Tests for the `Turso.Platform.Groups` module"
+        [ listTests tursoPlatformConnection groupName
+        , retrieveTests tursoPlatformConnection groupName
+        , retrieveConfigurationTests tursoPlatformConnection groupName
+        ]
+
+
+{-|-}
+listTests : Turso.Platform.Connection -> String -> Test
+listTests connection groupName =
+    describe "Tests for `Turso.Platform.Groups.list` function"
+        [ await
+            (Turso.Platform.Groups.list
+                connection
+            )
+            "Awaiting listing groups"
+            (\res ->
+                test "The returned group list contains the passed group name"
+                    (\_ ->
+                        Expect.equal 
+                            (Array.any 
+                                (\{ name } -> name == groupName) 
+                                res.data
+                            )
+                            True
+                    )
+            )
+        ]
+
+
+{-|-}
+retrieveTests : Turso.Platform.Connection -> String -> Test
+retrieveTests connection groupName =
+    describe "Tests for `Turso.Platform.Groups.retrieve` function"
+        [ await
+            (Turso.Platform.Groups.retrieve
+                connection
+                { groupName = groupName 
+                }
+            )
+            "Await retrieving a group that should exist"
+            (\res ->
+                test "The resulting group name matches the given group name"
+                    (\_ ->
+                        Expect.equal res.data.name groupName 
+                    )
+            )
+        , awaitError
+            (Turso.Platform.Groups.retrieve
+                connection
+                { groupName = "agroupnamethatshouldnotexistandifitdoesthistestwillfail" 
+                }
+            )
+            "Await retrieving a group that should not exist"
+            (\err ->
+                test "The resulting error matches the expected error"
+                    (\_ ->
+                        Expect.equal err Turso.Platform.Groups.RetrieveErrorGroupNotFound
+                    )
+            )
+        ]
+
+
+{-|-}
+retrieveConfigurationTests : Turso.Platform.Connection -> String -> Test
+retrieveConfigurationTests connection groupName =
+    describe "Tests for the `Turso.Platform.Groups.retrieveConfiguration` function"
+        [ await
+            (Turso.Platform.Groups.retrieveConfiguration
+                connection
+                { groupName = groupName 
+                }
+            )
+            "Await retrieving configuration for a group that should exist"
+            (\res ->
+                test "Retrieving the configuration succeeds!"
+                    (\_ ->
+                        Expect.pass 
+                    )
+            )
+        , awaitError
+            (Turso.Platform.Groups.retrieveConfiguration
+                connection
+                { groupName = "agroupnamethatshouldnotexistandifitdoesthistestwillfail" 
+                }
+            )
+            "Await retrieving configuration for a group that should not exist"
+            (\err ->
+                test "The resulting error matches the expected error"
+                    (\_ ->
+                        Expect.equal err Turso.Platform.Groups.RetrieveConfigurationErrorGroupNotFound
+                    )
+            )
+        ]

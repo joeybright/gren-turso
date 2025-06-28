@@ -1,0 +1,145 @@
+module Tests.Turso.Db.Decode exposing ( tests )
+
+{-|-}
+
+import Expect
+import Json.Encode
+import Json.Decode
+import Fuzz
+import Test exposing (Test, describe, test, fuzz)
+import Turso.Db.Decode
+
+
+{-|-}
+tests : Test
+tests =
+    describe "Tests for the `Turso.Db.Decode` module"
+        [ boolTests
+        , floatTests
+        ]
+
+
+{-|-}
+boolTests : Test
+boolTests =
+    describe "Tests for the `Turso.Db.Decode.bool` function"
+        [ test "Successfully decodes a string value of `\"TRUE\" to `True`"
+            (\_ ->
+                let
+                    toDecode =
+                        Json.Encode.object 
+                            [ { key = "bool_field", value = Json.Encode.string "TRUE" } 
+                            ]
+                in
+                Turso.Db.Decode.bool "bool_field"
+                    |> Turso.Db.Decode.unwrap
+                    |> \decoder -> Json.Decode.decodeValue decoder toDecode
+                    |> Expect.equal (Ok True)
+            )
+        , test "Successfully decodes a string value of `\"FALSE\" to `False`"
+            (\_ ->
+                let
+                    toDecode =
+                        Json.Encode.object 
+                            [ { key = "bool_field", value = Json.Encode.string "FALSE" } 
+                            ]
+                in
+                Turso.Db.Decode.bool "bool_field"
+                    |> Turso.Db.Decode.unwrap
+                    |> \decoder -> Json.Decode.decodeValue decoder toDecode
+                    |> Expect.equal (Ok False)
+            )
+        , test "Successfully decodes a int value of 0 to `False`"
+            (\_ ->
+                let
+                    toDecode =
+                        Json.Encode.object 
+                            [ { key = "bool_field", value = Json.Encode.int 0 } 
+                            ]
+                in
+                Turso.Db.Decode.bool "bool_field"
+                    |> Turso.Db.Decode.unwrap
+                    |> \decoder -> Json.Decode.decodeValue decoder toDecode
+                    |> Expect.equal (Ok False)
+            )
+        , test "Successfully decodes a int value of 1 to `True`"
+            (\_ ->
+                let
+                    toDecode =
+                        Json.Encode.object 
+                            [ { key = "bool_field", value = Json.Encode.int 1 } 
+                            ]
+                in
+                Turso.Db.Decode.bool "bool_field"
+                    |> Turso.Db.Decode.unwrap
+                    |> \decoder -> Json.Decode.decodeValue decoder toDecode
+                    |> Expect.equal (Ok True)
+            )
+        , fuzz Fuzz.string
+            "Properly decodes a random string value"
+            (\fuzzedString ->
+                let
+                    toDecode =
+                        Json.Encode.object 
+                            [ { key = "bool_field", value = Json.Encode.string fuzzedString } 
+                            ]
+                in
+                Turso.Db.Decode.bool "bool_field"
+                    |> Turso.Db.Decode.unwrap
+                    |> \decoder -> Json.Decode.decodeValue decoder toDecode
+                    |> (\result ->
+                        if fuzzedString == "TRUE" then
+                            Expect.equal result (Ok True)
+
+                        else if fuzzedString == "FALSE" then
+                            Expect.equal result (Ok False)
+
+                        else
+                            Expect.err result
+                    )
+            )
+        , fuzz Fuzz.int
+            "Properly decodes a random int value"
+            (\fuzzedInt ->
+                let
+                    toDecode =
+                        Json.Encode.object 
+                            [ { key = "bool_field", value = Json.Encode.int fuzzedInt } 
+                            ]
+                in
+                Turso.Db.Decode.bool "bool_field"
+                    |> Turso.Db.Decode.unwrap
+                    |> \decoder -> Json.Decode.decodeValue decoder toDecode
+                    |> (\result ->
+                        if fuzzedInt == 1 then
+                            Expect.equal result (Ok True)
+
+                        else if fuzzedInt == 0 then
+                            Expect.equal result (Ok False)
+
+                        else
+                            Expect.err result
+                    )
+            )
+        ]
+
+
+{-|-}
+floatTests : Test
+floatTests =
+    describe "Tests for the `Turso.Db.Decode.float` function"
+        [ fuzz Fuzz.niceFloat
+            "Successfully decodes a float value"
+            (\fuzzedFloat ->
+                let
+                    toDecode =
+                        Json.Encode.object 
+                            [ { key = "float_field", value = Json.Encode.float fuzzedFloat } 
+                            ]
+                in
+                Turso.Db.Decode.float "float_field"
+                    |> Turso.Db.Decode.unwrap
+                    |> \decoder -> Json.Decode.decodeValue decoder toDecode
+                    |> Expect.equal (Ok fuzzedFloat)
+            )
+        ]

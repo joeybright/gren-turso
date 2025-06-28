@@ -1,0 +1,109 @@
+module Tests.Turso.Platform.Tokens exposing ( tests )
+
+{-|-}
+
+import Expect
+import Test.Runner.Effectful exposing (Test, run, describe, test, await, awaitError)
+import Turso.Platform
+import Turso.Platform.Databases
+import Turso.Platform.Tokens
+import Crypto
+
+
+{-|-}
+type alias Configuration =
+    {}
+
+
+{-|-}
+tests : Turso.Platform.Connection -> Configuration -> Test
+tests connection {} =
+    let
+        { httpPermission, accessToken, organizationSlug } =
+            connection
+    in
+    describe "Tests for the `Turso.Platform.Tokens` module"
+        [ await 
+            Crypto.getSecureContext 
+            "Await secure context for Crypto module functions" 
+            (\secureContext -> 
+                await
+                    (Crypto.randomUuidV4 secureContext)
+                    "Await generating a random token name value"
+                    (\randomUuid ->
+                        let
+                            testTokenName =
+                                "gren-test-token-" ++ randomUuid
+                        in
+                        await
+                            (Turso.Platform.Tokens.create
+                                { permission = httpPermission
+                                , token = accessToken 
+                                , createdTokenName = testTokenName
+                                }
+                            )
+                            "Await the creation of a new token"
+                            (\createdTokenResponse ->
+                                describe "Tests after getting a created token"
+                                    [ test "The name of the created token matches the name passed"
+                                        (\_ ->
+                                            Expect.equal createdTokenResponse.data.name testTokenName
+                                        )
+                                    , await
+                                        (Turso.Platform.Tokens.list 
+                                            { permission = httpPermission 
+                                            , token = accessToken
+                                            }
+                                        )
+                                        "Await a list of created tokens"
+                                        (\tokenListResponse ->
+                                            describe "Tests after getting the token list"
+                                                [ test "The newly created token is in the retrived list of tokens"
+                                                    (\_ ->
+                                                        tokenListResponse.data.tokens
+                                                            |> Array.foldl
+                                                                (\{ name } acc ->
+                                                                    if acc == True then
+                                                                        True 
+                                                                    else if name == testTokenName then
+                                                                        True
+                                                                    else
+                                                                        False
+                                                                )
+                                                                False
+                                                            |> Expect.equal True
+                                                    )
+                                                , await
+                                                    (Turso.Platform.Tokens.validate 
+                                                        { permission = httpPermission 
+                                                        , token = createdTokenResponse.data.token
+                                                        }
+                                                    )
+                                                    "Await validating the given token"
+                                                    (\_res -> 
+                                                        describe "Tests after validating the given token"
+                                                            [ test "The given token should be valid" 
+                                                                (\_ -> Expect.pass)
+                                                            , await
+                                                                (Turso.Platform.Tokens.revoke 
+                                                                    { permission = httpPermission 
+                                                                    , token = accessToken
+                                                                    , tokenNameToRevoke = createdTokenResponse.data.name
+                                                                    }
+                                                                )
+                                                                "Await deleting the created token to clean up test data"
+                                                                (\revokeTokenResponse ->
+                                                                    test "The name of the deleted token equals the generated token name"
+                                                                        (\_ ->
+                                                                            Expect.equal revokeTokenResponse.data.tokenName testTokenName
+                                                                        )
+                                                                )
+                                                            ]
+                                                    )
+                                                ]
+                                        )
+                                    ]
+                            )
+                    )
+            )
+        ]

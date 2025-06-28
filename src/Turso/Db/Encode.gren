@@ -1,0 +1,148 @@
+module Turso.Db.Encode exposing
+    ( Value
+    , bool, float, int, null, posix, string
+    , unwrap
+    )
+
+{-| Encode SQL parameters.
+
+Encoded parameters are passed in an array via the `parameters` field,
+where the string matches the colon-prefixed named of the parameter in the sql:
+
+    Turso.Db.execute connection
+        { statement = "INSERT INTO users (id, name) VALUES (:id, :name)"
+        , parameters =
+            [ Turso.Db.Encode.int "id" 1
+            , Turso.Db.Encode.string "name" "Justin"
+            ]
+        }
+
+Queries and statements where encoded parameters are used can be found in the
+`Turso.Db` module.
+
+@docs Value
+
+## Encode Values
+
+@docs  string, int, float, bool, null, posix
+
+## Internals
+
+@docs unwrap
+
+-}
+
+import Json.Encode
+import Time
+
+
+{-| An encoded parameter value.
+-}
+type Value
+    = Value
+        { key : String
+        , value : Json.Encode.Value
+        , type_ : String
+        }
+
+
+{-| Encode a boolean value.
+
+    Db.Encode.bool "is_admin" True
+-}
+bool : String -> Bool -> Value
+bool field b =
+    Value
+        { key = field
+        , value =
+            if b then
+                Json.Encode.int 1
+            else
+                Json.Encode.int 0
+        , type_ = "text"
+        }
+
+
+{-| Encode a float.
+
+    Db.Encode.float "pi" 3.14159265359
+-}
+float : String -> Float -> Value
+float field f =
+    Value
+        { key = field
+        , value = Json.Encode.float f
+        , type_ = "float"
+        }
+
+
+{-| Encode an integer.
+
+    Db.Encode.int "count" 100
+-}
+int : String -> Int -> Value
+int field i =
+    Value
+        { key = field
+        -- Note: Turso requires integers to be strings when sent over the network
+        -- so that's what's being done here. The right type of data should be inserted
+        -- into the database because of the `"integer"` type.
+        , value = Json.Encode.string (String.fromInt i)
+        , type_ = "integer"
+        }
+
+
+{-| Encode null.
+
+    Db.Encode.null "nothing"
+-}
+null : String -> Value
+null field =
+    Value
+        { key = field
+        , value = Json.Encode.null
+        , type_ = "null"
+        }
+
+
+{-| Encode a Time.Posix value.
+
+This is what you should use for date fields. The database field should be an INTEGER type.
+It will be stored as the number of milliseconds since 1970 January 1 at 00:00:00 UTC (it was a Thursday).
+
+    Db.Encode.posix "created_at" (Time.millisToPosix 0)
+-}
+posix : String -> Time.Posix -> Value
+posix field t =
+    Value
+        { key = field
+        , value =
+            Time.posixToMillis t |> String.fromInt |> Json.Encode.string
+        , type_ = "integer"
+        }
+
+
+{-| Encode a String value.
+
+    Db.Encode.string "name" "Jessica Therme"
+-}
+string : String -> String -> Value
+string field s =
+    Value
+        { key = field
+        , value = Json.Encode.string s
+        , type_ = "text"
+        }
+
+
+-- HELPERS
+
+
+{-| Unwrap the `Value` type and turn it a record.
+
+This is used by other modules in this package and not needed to properly 
+encode parameters for queries.
+-}
+unwrap : Value -> { key : String, value : Json.Encode.Value, type_ : String }
+unwrap (Value v) =
+    v

@@ -1,0 +1,24 @@
+module Turso.Helpers exposing ( .. )
+
+{-|-}
+import HttpClient
+import Url.Builder
+
+
+{-| Construct query parameters for values for passed values who are
+`Just value` and not adding query parameters for values that are`Nothing`.
+-}
+maybeUrlParams : Array { key : String, value : Maybe String } -> Array Url.Builder.QueryParameter
+maybeUrlParams =
+    Array.foldl
+        (\{ key, value } acc ->
+            when value is
+                Just justValue ->
+                    Array.pushLast
+                        (Url.Builder.string key justValue)
+                        acc
+                        
+                Nothing ->
+                    acc
+        )
+        []
