@@ -1,14 +1,14 @@
 {
+    "type": "package",
+    "platform": "node",
     "name": "joeybright/gren-turso",
     "summary": "Interact with the Turso Platform API and libSQL remote protocol (over HTTP)",
     "license": "BSD-3-Clause",
-    "version": "1.0.0",
-    "type": "package",
-    "platform": "node",
+    "version": "1.0.1",
     "exposed-modules": [
         "Turso.Db",
         "Turso.Db.Encode",
-        "Turso.Db.Decode", 
+        "Turso.Db.Decode",
         "Turso.Platform",
         "Turso.Platform.Databases",
         "Turso.Platform.Groups",
