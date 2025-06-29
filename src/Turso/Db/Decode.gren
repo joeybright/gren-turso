@@ -117,7 +117,20 @@ int : String -> Decoder Int
 int name =
     FieldDecoder
         { name = name
-        , decoder = Json.Decode.int
+        , decoder =
+            Json.Decode.oneOf
+                [ Json.Decode.string
+                    |> Json.Decode.map String.toInt
+                    |> Json.Decode.andThen (\value ->
+                        when value is
+                            Just parsedInt ->
+                                Json.Decode.succeed parsedInt
+                            
+                            Nothing ->
+                                Json.Decode.fail "`Turso.Db.Decode.int`: Cannot transform the integer `String` into an `Int`"
+                    )
+                , Json.Decode.int
+                ]
         }
 
 
@@ -129,7 +142,20 @@ float : String -> Decoder Float
 float name =
     FieldDecoder
         { name = name
-        , decoder = Json.Decode.float
+        , decoder = 
+            Json.Decode.oneOf
+                [ Json.Decode.string
+                    |> Json.Decode.map String.toFloat
+                    |> Json.Decode.andThen (\value ->
+                        when value is
+                            Just parsedValue ->
+                                Json.Decode.succeed parsedValue
+                            
+                            Nothing ->
+                                Json.Decode.fail "`Turso.Db.Decode.float`: Cannot transform the float `String` into an `Float`"
+                    )
+                , Json.Decode.float
+                ]
         }
 
 
@@ -147,9 +173,21 @@ posix name =
     FieldDecoder
         { name = name
         , decoder =
-            Json.Decode.map
-                Time.millisToPosix
-                Json.Decode.int
+            Json.Decode.oneOf
+                [ Json.Decode.string
+                    |> Json.Decode.map String.toInt
+                    |> Json.Decode.andThen (\value ->
+                        when value is
+                            Just parsedValue ->
+                                Json.Decode.succeed
+                                    (Time.millisToPosix parsedValue)
+                            
+                            Nothing ->
+                                Json.Decode.fail "`Turso.Db.Decode.posix`: Cannot transform the integer `String` into an `Int`"
+                    )
+                , Json.Decode.int
+                    |> Json.Decode.map Time.millisToPosix
+                ]
         }
 
 

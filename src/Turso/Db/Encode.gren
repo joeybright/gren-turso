@@ -71,7 +71,10 @@ float : String -> Float -> Value
 float field f =
     Value
         { key = field
-        , value = Json.Encode.float f
+        -- Note: Turso requires floats to be strings when sent over the network
+        -- so that's what's being done here. The right type of data should be inserted
+        -- into the database because of the `"float"` type.
+        , value = Json.Encode.string (String.fromFloat f)
         , type_ = "float"
         }
 

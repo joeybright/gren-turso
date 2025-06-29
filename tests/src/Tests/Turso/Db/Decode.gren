@@ -8,14 +8,117 @@ import Json.Decode
 import Fuzz
 import Test exposing (Test, describe, test, fuzz)
 import Turso.Db.Decode
+import Time
 
 
 {-|-}
 tests : Test
 tests =
     describe "Tests for the `Turso.Db.Decode` module"
-        [ boolTests
+        [ intTests
         , floatTests
+        , posixTests
+        , boolTests
+        ]
+
+
+{-| Testing the `Turso.Db.Decode.int` function.
+
+Turso always returns data from the database as strings, so this function handles properly
+decoding both an valid integer strings and integer values as a backup.
+-}
+intTests : Test
+intTests =
+    describe "Tests for the `Turso.Db.Decode.int` function"
+        [ test "Successfully decodes a string value into an `Int"
+            (\_ ->
+                let
+                    toDecode =  
+                        Json.Encode.object 
+                            [ { key = "int_string_field", value = Json.Encode.string "1234" } 
+                            ]
+                in
+                Turso.Db.Decode.int "int_string_field"
+                    |> Turso.Db.Decode.unwrap
+                    |> \decoder -> Json.Decode.decodeValue decoder toDecode
+                    |> Expect.equal (Ok 1234)
+            )
+        , test "Successfully decodes a `Int` when the value is an integer"
+            (\_ ->
+                let
+                    toDecode =  
+                        Json.Encode.object 
+                            [ { key = "int_field", value = Json.Encode.int 1234 } 
+                            ]
+                in
+                Turso.Db.Decode.int "int_field"
+                    |> Turso.Db.Decode.unwrap
+                    |> \decoder -> Json.Decode.decodeValue decoder toDecode
+                    |> Expect.equal (Ok 1234)
+            )
+        , test "Fails to decode a string value that cannot be transformed into an `Int`"
+            (\_ ->
+                let
+                    toDecode =  
+                        Json.Encode.object 
+                            [ { key = "int_string_field", value = Json.Encode.string "abc" } 
+                            ]
+                in
+                Turso.Db.Decode.int "int_string_field"
+                    |> Turso.Db.Decode.unwrap
+                    |> \decoder -> Json.Decode.decodeValue decoder toDecode
+                    |> Expect.err
+            )
+        ]
+
+
+{-| Testing the `Turso.Db.Decode.posix` function.
+
+Decoding posix values works similarly to how integers are decoded. See above for the 
+caveats when dealing with Turso.
+-}
+posixTests : Test
+posixTests =
+    describe "Tests for the `Turso.Db.Decode.posix` function"
+        [ test "Successfully decodes a string value into an posix value"
+            (\_ ->
+                let
+                    toDecode =  
+                        Json.Encode.object 
+                            [ { key = "posix_string_field", value = Json.Encode.string "1234" } 
+                            ]
+                in
+                Turso.Db.Decode.posix "posix_string_field"
+                    |> Turso.Db.Decode.unwrap
+                    |> \decoder -> Json.Decode.decodeValue decoder toDecode
+                    |> Expect.equal (Ok (Time.millisToPosix 1234))
+            )
+        , test "Successfully decodes a `Int` when the value is an integer into a posix value"
+            (\_ ->
+                let
+                    toDecode =  
+                        Json.Encode.object 
+                            [ { key = "posix_field", value = Json.Encode.int 1234 } 
+                            ]
+                in
+                Turso.Db.Decode.posix "posix_field"
+                    |> Turso.Db.Decode.unwrap
+                    |> \decoder -> Json.Decode.decodeValue decoder toDecode
+                    |> Expect.equal (Ok (Time.millisToPosix 1234))
+            )
+        , test "Fails to decode a string value that cannot be transformed into an `Int`"
+            (\_ ->
+                let
+                    toDecode =  
+                        Json.Encode.object 
+                            [ { key = "posix_string_field", value = Json.Encode.string "abc" } 
+                            ]
+                in
+                Turso.Db.Decode.posix "posix_string_field"
+                    |> Turso.Db.Decode.unwrap
+                    |> \decoder -> Json.Decode.decodeValue decoder toDecode
+                    |> Expect.err
+            )
         ]
 
 
@@ -128,18 +231,43 @@ boolTests =
 floatTests : Test
 floatTests =
     describe "Tests for the `Turso.Db.Decode.float` function"
-        [ fuzz Fuzz.niceFloat
-            "Successfully decodes a float value"
-            (\fuzzedFloat ->
+        [ test "Successfully decodes a string value into an `Float"
+            (\_ ->
                 let
-                    toDecode =
+                    toDecode =  
                         Json.Encode.object 
-                            [ { key = "float_field", value = Json.Encode.float fuzzedFloat } 
+                            [ { key = "float_string_field", value = Json.Encode.string "12.34" } 
+                            ]
+                in
+                Turso.Db.Decode.float "float_string_field"
+                    |> Turso.Db.Decode.unwrap
+                    |> \decoder -> Json.Decode.decodeValue decoder toDecode
+                    |> Expect.equal (Ok 12.34)
+            )
+        , test "Successfully decodes a `Float` when the value is an float"
+            (\_ ->
+                let
+                    toDecode =  
+                        Json.Encode.object 
+                            [ { key = "float_field", value = Json.Encode.float 12.34 } 
                             ]
                 in
                 Turso.Db.Decode.float "float_field"
                     |> Turso.Db.Decode.unwrap
                     |> \decoder -> Json.Decode.decodeValue decoder toDecode
-                    |> Expect.equal (Ok fuzzedFloat)
+                    |> Expect.equal (Ok 12.34)
+            )
+        , test "Fails to decode a string value that cannot be transformed into an `Int`"
+            (\_ ->
+                let
+                    toDecode =  
+                        Json.Encode.object 
+                            [ { key = "float_string_field", value = Json.Encode.string "abc" } 
+                            ]
+                in
+                Turso.Db.Decode.float "float_string_field"
+                    |> Turso.Db.Decode.unwrap
+                    |> \decoder -> Json.Decode.decodeValue decoder toDecode
+                    |> Expect.err
             )
         ]
