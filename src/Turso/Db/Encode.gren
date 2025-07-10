@@ -55,10 +55,12 @@ bool field b =
     Value
         { key = field
         , value =
+            -- Note: turso requires all values (other than null) to be sent over the
+            -- network as strings.
             if b then
-                Json.Encode.int 1
+                Json.Encode.string (String.fromInt 1)
             else
-                Json.Encode.int 0
+                Json.Encode.string (String.fromInt 0)
         , type_ = "text"
         }
 

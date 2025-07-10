@@ -31,9 +31,9 @@ boolTests =
                             |> .value
                 in
                 Json.Decode.decodeValue 
-                    Json.Decode.int
+                    Json.Decode.string
                     value
-                    |> Expect.equal (Ok 1)
+                    |> Expect.equal (Ok "1")
             )
         , test "Encoding a `False` value produces expected JSON value"
             (\_ ->
@@ -44,9 +44,9 @@ boolTests =
                             |> .value
                 in
                 Json.Decode.decodeValue 
-                    Json.Decode.int
+                    Json.Decode.string
                     value
-                    |> Expect.equal (Ok 0)
+                    |> Expect.equal (Ok "0")
             )
         , test "Encoding an `Int` produces a `String` value, as needed by the Turso libSQL API"
             (\_ ->

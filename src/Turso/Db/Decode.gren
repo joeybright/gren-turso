@@ -105,6 +105,14 @@ bool name =
                                 "FALSE" -> Json.Decode.succeed False
                                 _ -> Json.Decode.fail "Got unexpected string in boolean field"
                         )
+                , Json.Decode.string
+                    |> Json.Decode.andThen
+                        (\s ->
+                            when s is
+                                "0" -> Json.Decode.succeed False
+                                "1" -> Json.Decode.succeed True
+                                _ -> Json.Decode.fail "Got unexpected string in boolean field"
+                        )
                 ]
         }
 
