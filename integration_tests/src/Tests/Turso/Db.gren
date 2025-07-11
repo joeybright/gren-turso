@@ -143,11 +143,14 @@ getMaybeOneTests connection config =
             (\res ->
                 test "The result should equal the expected value"
                     (\_ ->
-                        when res.data.data is
-                            Just { test } ->
-                                Expect.equal  test "11354314315135133151353"
+                        when res.data is
+                            Turso.Db.Success { data = Just { test } } ->
+                                Expect.equal test "11354314315135133151353"
                             
-                            Nothing ->
+                            Turso.Db.Success _ ->
+                                Expect.fail "The function should return the expected value"
+
+                            Turso.Db.Unknown ->
                                 Expect.fail "The function should return the expected value"
                     )
             )
@@ -169,7 +172,12 @@ getMaybeOneTests connection config =
             (\res ->
                 test "The result should equal the expected value"
                     (\_ ->
-                        Expect.equal res.data.data Nothing
+                        when res.data is
+                            Turso.Db.Success { data } ->
+                                Expect.equal data Nothing
+
+                            Turso.Db.Unknown ->
+                                Expect.fail ""
                     )
             )
         ]
@@ -197,7 +205,12 @@ getOneTests connection config =
             (\res ->
                 test "The result should equal the expected value"
                     (\_ ->
-                        Expect.equal res.data.data.test "11354314315135133151353"
+                        when res.data is
+                            Turso.Db.Success { data } ->
+                                Expect.equal data.test "11354314315135133151353"
+
+                            Turso.Db.Unknown -> 
+                                Expect.fail ""
                     )
             )
         , awaitError
