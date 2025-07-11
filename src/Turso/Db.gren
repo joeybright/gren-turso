@@ -3,7 +3,7 @@ module Turso.Db exposing
     , execute, transaction
     , getAll, getMaybeOne, getOne
     , Query, Statement
-    , Result, Data
+    , Result
     )
 
 {-| Module for configuring access to a specific Turso database and sending
@@ -27,7 +27,7 @@ SQL to it.
 
 ## Getting Results
 
-@docs Result, Data
+@docs Result
 -}
 
 import Task exposing ( Task )
@@ -97,24 +97,7 @@ connection.
 -}
 type alias Result a =
     { baton : Maybe String
-    , result : a
-    }
-
-
-{-| The data returned from a query or statement sent to the database.
-
-- `affectedRowCount` will return the amount of rows affected by the query or 
-statement. For example, if you run the `execute` function with a `DELETE` 
-statement, the returned `affectedRowcount` would indicate the number of rows 
-deleted.
-- `lastInsertedRowId` will return the id of the last inserted row. This id is
-the Turso internal representation of the row that was inserted. This will be
-`Nothing` if no rows were inserted as part of the query.
-- `data` is the data that was decoded from the given query. If you are running 
-statements (using `execute` or `transaction`), no data will be returned.
--}
-type alias Data a =
-    { affectedRowCount : Int
+    , affectedRowCount : Int
     , lastInsertRowId : Maybe String
     , data : a
     }
@@ -190,118 +173,118 @@ Accepts a function that maps over decoded Data to transform them into whatever v
 is necessary by the calling function. Also accepts a decoder which decodes the variable
 data expected to be returned from the given SQL queries.
 -}
-queryDecoder : (Array (Data a) -> Json.Decode.Decoder b) -> Json.Decode.Decoder a -> Json.Decode.Decoder (Result b)
+queryDecoder : (Array (Result a) -> Json.Decode.Decoder b) -> Json.Decode.Decoder a -> Json.Decode.Decoder b
 queryDecoder mapFunc decoder =
-    Json.Decode.map3
-        (\baton baseUrl data ->
-            { baton = baton
-            -- `baseUrl` is commented out given, in testing, it's not often returned.
-            -- Can be added in future versions of the package.
-            -- , baseUrl = baseUrl 
-            , result = data
-            }
-        )
-        (Json.Decode.field "baton" (Json.Decode.maybe Json.Decode.string))
-        (Json.Decode.field "base_url" (Json.Decode.maybe Json.Decode.string))
-        (Json.Decode.field "results"
-            (Json.Decode.andThen mapFunc
-                (Json.Decode.array
-                    (Json.Decode.map
-                        (\response ->
-                            { affectedRowCount = response.affectedRowCount
-                            , lastInsertRowId = response.lastInsertRowId
-                            , data = response.row
-                            }
-                        )
-                        (Json.Decode.field "response"
-                            (Json.Decode.map
-                                (\result ->
-                                    { result = result
-                                    , affectedRowCount = result.affectedRowCount
-                                    , lastInsertRowId = result.lastInsertRowId
-                                    , row = result.row
-                                    }
-                                )
-                                (Json.Decode.field "result"
-                                    (Json.Decode.andThen
-                                        (\{ res, lastInsertRowId, affectedRowCount } ->
-                                            when Json.Decode.decodeValue decoder res is
-                                                Ok res_ ->
-                                                    Json.Decode.succeed 
-                                                        { lastInsertRowId = lastInsertRowId
-                                                        , affectedRowCount = affectedRowCount
-                                                        , row = res_ 
-                                                        }
-                                                
-                                                Err _ ->
-                                                    Json.Decode.fail "Could not decode rows with passed decoder."
-                                        )
-                                        (Json.Decode.map4
-                                            (\cols rows affectedRowCount lastInsertRowId ->
-                                                let
-                                                    res =
-                                                        Array.map
-                                                            (\row ->
-                                                                Array.foldl 
-                                                                    (\{ key, value } -> 
-                                                                        Dict.set key value
-                                                                    )
-                                                                    Dict.empty
-                                                                    (Array.map2
-                                                                        (\col rowItem ->
-                                                                            { key = col, value = rowItem }
-                                                                        )
-                                                                        (Array.map (\a -> a.name) cols)
-                                                                        row
-                                                                    )
-                                                            )
-                                                            (Array.map (Array.map (\b -> b.value)) rows)
-                                                            |> Json.Encode.array (Json.Encode.dict identity identity)
-                                                in
-                                                { affectedRowCount = affectedRowCount
-                                                , lastInsertRowId = lastInsertRowId
-                                                , res = res
+    Json.Decode.oneOf
+        [ Json.Decode.field "baton" (Json.Decode.maybe Json.Decode.string)
+            |> Json.Decode.andThen (\baton ->
+                Json.Decode.map2
+                    (\baseUrl data ->
+                        data
+                    )
+                    (Json.Decode.field "base_url" (Json.Decode.maybe Json.Decode.string))
+                    (Json.Decode.field "results"
+                        (Json.Decode.andThen mapFunc
+                            (Json.Decode.array
+                                (Json.Decode.map
+                                    (\response ->
+                                        { affectedRowCount = response.affectedRowCount
+                                        , lastInsertRowId = response.lastInsertRowId
+                                        , data = response.row
+                                        , baton = baton
+                                        }
+                                    )
+                                    (Json.Decode.field "response"
+                                        (Json.Decode.map
+                                            (\result ->
+                                                { result = result
+                                                , affectedRowCount = result.affectedRowCount
+                                                , lastInsertRowId = result.lastInsertRowId
+                                                , row = result.row
                                                 }
                                             )
-                                            (Json.Decode.field "cols" 
-                                                (Json.Decode.array
-                                                    (Json.Decode.map2
-                                                        (\name type_ ->
-                                                            { name = name
-                                                            , type_ = type_
+                                            (Json.Decode.field "result"
+                                                (Json.Decode.andThen
+                                                    (\{ res, lastInsertRowId, affectedRowCount } ->
+                                                        when Json.Decode.decodeValue decoder res is
+                                                            Ok res_ ->
+                                                                Json.Decode.succeed 
+                                                                    { lastInsertRowId = lastInsertRowId
+                                                                    , affectedRowCount = affectedRowCount
+                                                                    , row = res_ 
+                                                                    }
+                                                            
+                                                            Err _ ->
+                                                                Json.Decode.fail "Could not decode rows with passed decoder."
+                                                    )
+                                                    (Json.Decode.map4
+                                                        (\cols rows affectedRowCount lastInsertRowId ->
+                                                            let
+                                                                res =
+                                                                    Array.map
+                                                                        (\row ->
+                                                                            Array.foldl 
+                                                                                (\{ key, value } -> 
+                                                                                    Dict.set key value
+                                                                                )
+                                                                                Dict.empty
+                                                                                (Array.map2
+                                                                                    (\col rowItem ->
+                                                                                        { key = col, value = rowItem }
+                                                                                    )
+                                                                                    (Array.map (\a -> a.name) cols)
+                                                                                    row
+                                                                                )
+                                                                        )
+                                                                        (Array.map (Array.map (\b -> b.value)) rows)
+                                                                        |> Json.Encode.array (Json.Encode.dict identity identity)
+                                                            in
+                                                            { affectedRowCount = affectedRowCount
+                                                            , lastInsertRowId = lastInsertRowId
+                                                            , res = res
                                                             }
                                                         )
-                                                        (Json.Decode.field "name" Json.Decode.string)
-                                                        (Json.Decode.field "decltype" Json.Decode.string)
-                                                    )
-                                                )
-                                            )
-                                            (Json.Decode.field "rows" 
-                                                (Json.Decode.array 
-                                                    (Json.Decode.array
-                                                        (Json.Decode.map2
-                                                            (\type_ value ->
-                                                                { type_ = type_
-                                                                , value = value
-                                                                }
+                                                        (Json.Decode.field "cols" 
+                                                            (Json.Decode.array
+                                                                (Json.Decode.map2
+                                                                    (\name type_ ->
+                                                                        { name = name
+                                                                        , type_ = type_
+                                                                        }
+                                                                    )
+                                                                    (Json.Decode.field "name" Json.Decode.string)
+                                                                    (Json.Decode.field "decltype" Json.Decode.string)
+                                                                )
                                                             )
-                                                            (Json.Decode.field "type" Json.Decode.string)
-                                                            (Json.Decode.field "value" Json.Decode.value)
                                                         )
+                                                        (Json.Decode.field "rows" 
+                                                            (Json.Decode.array 
+                                                                (Json.Decode.array
+                                                                    (Json.Decode.map2
+                                                                        (\type_ value ->
+                                                                            { type_ = type_
+                                                                            , value = value
+                                                                            }
+                                                                        )
+                                                                        (Json.Decode.field "type" Json.Decode.string)
+                                                                        (Json.Decode.field "value" Json.Decode.value)
+                                                                    )
+                                                                )
+                                                            )
+                                                        )
+                                                        (Json.Decode.field "affected_row_count" Json.Decode.int)
+                                                        (Json.Decode.field "last_insert_rowid" (Json.Decode.maybe Json.Decode.string))
                                                     )
                                                 )
                                             )
-                                            (Json.Decode.field "affected_row_count" Json.Decode.int)
-                                            (Json.Decode.field "last_insert_rowid" (Json.Decode.maybe Json.Decode.string))
                                         )
                                     )
                                 )
                             )
                         )
                     )
-                )
             )
-        )
+        ]
         
 
 {-| Wraps `queryDecoder` to only succeed decoding when there is at least
@@ -310,7 +293,7 @@ one result.
 This only cares if there is a single query result; should always succeed
 as long as the query has a single statement.
 -}
-queryDecoderSingleResult : Json.Decode.Decoder a -> Json.Decode.Decoder (Result (Data a))
+queryDecoderSingleResult : Json.Decode.Decoder a -> Json.Decode.Decoder (Result a)
 queryDecoderSingleResult =
     let
         func resultingArray =
@@ -327,7 +310,7 @@ queryDecoderSingleResult =
 {-| Wraps `queryDecoder` to only succeed decoding when there is a single 
 result.
 -}
-queryDecoderJustOneResult : Json.Decode.Decoder (Array a) -> Json.Decode.Decoder (Result (Data a))
+queryDecoderJustOneResult : Json.Decode.Decoder (Array a) -> Json.Decode.Decoder (Result a)
 queryDecoderJustOneResult =
     let
         func resultingArray =
@@ -339,6 +322,7 @@ queryDecoderJustOneResult =
                                 Json.Decode.succeed
                                     { affectedRowCount = result.affectedRowCount
                                     , lastInsertRowId = result.lastInsertRowId
+                                    , baton = result.baton
                                     , data = value 
                                     }
                             
@@ -356,10 +340,19 @@ queryDecoderJustOneResult =
 
 {-| Wraps `queryDecoder` to always succeed decoding when there is a single
 result, but succeed with `Nothing` if there is not.
+
+This will still fail decoding if there is not any results returned.
 -}
-queryDecoderMaybeOneResult : Json.Decode.Decoder (Array a) -> Json.Decode.Decoder (Result (Maybe (Data a)))
+queryDecoderMaybeOneResult : Json.Decode.Decoder (Array a) -> Json.Decode.Decoder (Result (Maybe a))
 queryDecoderMaybeOneResult =
     let
+        resultRecord result data =
+            { affectedRowCount = result.affectedRowCount
+            , lastInsertRowId = result.lastInsertRowId
+            , baton = result.baton
+            , data = data
+            }
+
         func resultingArray =
             when Array.first resultingArray is
                 Just result ->
@@ -367,21 +360,16 @@ queryDecoderMaybeOneResult =
                         Just value ->
                             if Array.length result.data == 1 then
                                 Json.Decode.succeed 
-                                    (Just 
-                                        { affectedRowCount = result.affectedRowCount
-                                        , lastInsertRowId = result.lastInsertRowId
-                                        , data = value 
-                                        }
-                                    )
+                                    (resultRecord result (Just value))
                             
                             else
-                                Json.Decode.succeed Nothing
+                                Json.Decode.succeed (resultRecord result Nothing)
 
                         Nothing ->
-                            Json.Decode.succeed Nothing
+                            Json.Decode.succeed (resultRecord result Nothing)
 
                 Nothing ->
-                    Json.Decode.succeed Nothing
+                    Json.Decode.fail ""
     in
     queryDecoder func
 
@@ -403,7 +391,7 @@ or more than one result, it will fail.
                 (Turso.Db.Decode.string "name")
         }
 -}
-getOne : Connection -> Query a -> Task (HttpClient.Error (Result (Data a))) (HttpClient.Response (Result (Data a)))
+getOne : Connection -> Query a -> Task (HttpClient.Error (Result a)) (HttpClient.Response (Result a))
 getOne connection { query, parameters, decoder } =
     let
         statement =
@@ -439,7 +427,7 @@ or more than one result, it will fail.
                 (Turso.Db.Decode.string "id")
         }
 -}
-getMaybeOne : Connection -> Query a -> Task (HttpClient.Error (Result (Maybe (Data a)))) (HttpClient.Response (Result (Maybe (Data a))))
+getMaybeOne : Connection -> Query a -> Task (HttpClient.Error (Result (Maybe a))) (HttpClient.Response (Result (Maybe a)))
 getMaybeOne connection { query, parameters, decoder } =
     let
         statement =
@@ -473,7 +461,7 @@ getMaybeOne connection { query, parameters, decoder } =
                 (Turso.Db.Decode.string "id")
         }
 -}
-getAll : Connection -> Query a -> Task (HttpClient.Error (Result (Data (Array a)))) (HttpClient.Response (Result (Data (Array a))))
+getAll : Connection -> Query a -> Task (HttpClient.Error (Result (Array a))) (HttpClient.Response (Result (Array a)))
 getAll connection { query, parameters, decoder } =
     let
         statement =
@@ -499,7 +487,7 @@ getAll connection { query, parameters, decoder } =
             ]
         }
 -}
-execute : Connection -> Statement -> Task (HttpClient.Error (Result (Data {}))) (HttpClient.Response (Result (Data {})))
+execute : Connection -> Statement -> Task (HttpClient.Error (Result {})) (HttpClient.Response (Result {}))
 execute connection statement =
     internalTransaction connection 
         { prepareDecoder = queryDecoderSingleResult
@@ -526,7 +514,7 @@ execute connection statement =
           }
         ]
 -}
-transaction : Connection -> Array Statement ->  Task (HttpClient.Error (Result (Array (Data {})))) (HttpClient.Response (Result (Array (Data {}))))
+transaction : Connection -> Array Statement ->  Task (HttpClient.Error (Array (Result {}))) (HttpClient.Response (Array (Result {})))
 transaction connection =
     internalTransaction connection 
         { prepareDecoder = queryDecoder Json.Decode.succeed

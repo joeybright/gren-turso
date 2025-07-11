@@ -143,9 +143,9 @@ getMaybeOneTests connection config =
             (\res ->
                 test "The result should equal the expected value"
                     (\_ ->
-                        when res.data.result is
-                            Just { data } ->
-                                Expect.equal data.test "11354314315135133151353"
+                        when res.data.data is
+                            Just { test } ->
+                                Expect.equal  test "11354314315135133151353"
                             
                             Nothing ->
                                 Expect.fail "The function should return the expected value"
@@ -169,7 +169,7 @@ getMaybeOneTests connection config =
             (\res ->
                 test "The result should equal the expected value"
                     (\_ ->
-                        Expect.equal res.data.result Nothing
+                        Expect.equal res.data.data Nothing
                     )
             )
         ]
@@ -197,7 +197,7 @@ getOneTests connection config =
             (\res ->
                 test "The result should equal the expected value"
                     (\_ ->
-                        Expect.equal res.data.result.data.test "11354314315135133151353"
+                        Expect.equal res.data.data.test "11354314315135133151353"
                     )
             )
         , awaitError
