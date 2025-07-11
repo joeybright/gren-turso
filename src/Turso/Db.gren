@@ -184,7 +184,7 @@ statementsEncoder queries =
         ]
 
 
-{-| Deocdes query Data from Turso.
+{-| Decodes query Data from Turso.
 
 Accepts a function that maps over decoded Data to transform them into whatever value 
 is necessary by the calling function. Also accepts a decoder which decodes the variable
