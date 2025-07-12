@@ -4,7 +4,7 @@
     "name": "joeybright/gren-turso",
     "summary": "Interact with the Turso Platform API and libSQL remote protocol (over HTTP)",
     "license": "BSD-3-Clause",
-    "version": "1.0.2",
+    "version": "2.0.0",
     "exposed-modules": [
         "Turso.Db",
         "Turso.Db.Encode",
