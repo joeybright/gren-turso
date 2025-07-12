@@ -197,6 +197,12 @@ boolTests =
                         else if fuzzedString == "FALSE" then
                             Expect.equal result (Ok False)
 
+                        else if fuzzedString == "0" then
+                            Expect.equal result (Ok False)
+
+                        else if fuzzedString == "1" then
+                            Expect.equal result (Ok True)
+
                         else
                             Expect.err result
                     )
