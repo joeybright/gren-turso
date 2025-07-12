@@ -444,7 +444,7 @@ or more than one result, it will fail.
                 (Turso.Db.Decode.string "name")
         }
 -}
-getOne : Connection -> Query a -> Task Error (Result a)
+getOne : Connection -> Query a -> Task Error (HttpClient.Response (Result a))
 getOne connection { query, parameters, decoder } =
     let
         statement =
@@ -500,7 +500,7 @@ or more than one result, it will fail.
                 (Turso.Db.Decode.string "id")
         }
 -}
-getMaybeOne : Connection -> Query a -> Task Error (Result (Maybe a))
+getMaybeOne : Connection -> Query a -> Task Error (HttpClient.Response (Result (Maybe a)))
 getMaybeOne connection { query, parameters, decoder } =
     let
         statement =
@@ -554,7 +554,7 @@ getMaybeOne connection { query, parameters, decoder } =
                 (Turso.Db.Decode.string "id")
         }
 -}
-getAll : Connection -> Query a -> Task Error (Result (Array a))
+getAll : Connection -> Query a -> Task Error (HttpClient.Response (Result (Array a)))
 getAll connection { query, parameters, decoder } =
     let
         statement =
@@ -600,7 +600,7 @@ getAll connection { query, parameters, decoder } =
             ]
         }
 -}
-execute : Connection -> Statement -> Task Error (Result {})
+execute : Connection -> Statement -> Task Error (HttpClient.Response (Result {}))
 execute connection statement =
     let
         handleError array =
@@ -647,7 +647,7 @@ execute connection statement =
           }
         ]
 -}
-transaction : Connection -> Array Statement ->  Task Error (Array (Result {}))
+transaction : Connection -> Array Statement ->  Task Error (HttpClient.Response (Array (Result {})))
 transaction connection statements =
     internalTransaction connection 
         { prepareDecoder = 
@@ -667,8 +667,15 @@ transaction connection statements =
         |> Task.mapError HttpError
         |> Task.andThen (\result ->
             result.data
-                |> Array.map outcomeToResult 
+                |> Array.map outcomeToResult__
                 |> Task.sequence
+                |> Task.map (\data -> 
+                    { statusCode = result.statusCode
+                    , statusText = result.statusText
+                    , headers = result.headers
+                    , data = data
+                    }
+                )
         )
 
 
@@ -730,14 +737,45 @@ removeHttpClientErrorData err =
 
 
 {-|-}
-taskFromOutcomeResponse : HttpClient.Response (Outcome a) -> Task Error (Result a)
+taskFromOutcomeResponse : HttpClient.Response (Outcome a) -> Task Error (HttpClient.Response (Result a))
 taskFromOutcomeResponse result =
-    outcomeToResult result.data
+    outcomeToResult result
 
 
 {-|-}
-outcomeToResult : Outcome a -> Task Error (Result a)
-outcomeToResult outcome =
+outcomeToResult : HttpClient.Response (Outcome a) -> Task Error (HttpClient.Response (Result a))
+outcomeToResult result =
+    when result.data is
+        Outcome_Success data ->
+            Task.succeed
+                { statusCode = result.statusCode
+                , statusText = result.statusText
+                , headers = result.headers
+                , data = data
+                }
+
+        Outcome_SqlParseError ->
+            Task.fail SqlParseError
+
+        Outcome_SqlInputError ->
+            Task.fail SqlInputError
+
+        Outcome_SqlManyStatements ->
+            Task.fail SqlManyStatements
+
+        Outcome_SqliteUnknownError ->
+            Task.fail SqliteUnknownError
+
+        Outcome_ArgsInvalid ->
+            Task.fail ArgsInvalid
+
+        _ ->
+            Task.fail (UnknownError "Unknown error")
+
+
+{-|-}
+outcomeToResult__ : Outcome a -> Task Error (Result a)
+outcomeToResult__ outcome =
     when outcome is
         Outcome_Success data ->
             Task.succeed data
