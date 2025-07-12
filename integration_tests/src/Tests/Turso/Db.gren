@@ -145,14 +145,11 @@ getMaybeOneTests connection config =
                 test "The result should equal the expected value"
                     (\_ ->
                         when res.data is
-                            Turso.Db.Success { data = Just { test } } ->
+                            Just { test } ->
                                 Expect.equal test "11354314315135133151353"
-                            
-                            Turso.Db.Success _ ->
-                                Expect.fail "The function should return the expected value"
 
-                            _ ->
-                                Expect.fail "The function should return the expected value"
+                            Nothing ->
+                                Expect.fail ""
                     )
             )
         , await
@@ -173,12 +170,7 @@ getMaybeOneTests connection config =
             (\res ->
                 test "The result should equal the expected value"
                     (\_ ->
-                        when res.data is
-                            Turso.Db.Success { data } ->
-                                Expect.equal data Nothing
-
-                            _ ->
-                                Expect.fail ""
+                        Expect.equal res.data Nothing
                     )
             )
         ]
@@ -206,12 +198,7 @@ getOneTests connection config =
             (\res ->
                 test "The result should equal the expected value"
                     (\_ ->
-                        when res.data is
-                            Turso.Db.Success { data } ->
-                                Expect.equal data.test "11354314315135133151353"
-
-                            _ -> 
-                                Expect.fail ""
+                        Expect.equal res.data.test "11354314315135133151353"
                     )
             )
         , awaitError
@@ -242,7 +229,7 @@ getOneTests connection config =
 errorTests : Turso.Db.Connection -> Configuration -> Test
 errorTests connection config =
     describe "Tests for queries that should return errors"
-        [ await
+        [ awaitError
             (Turso.Db.getOne
                 connection
                 { query = "SELECT * FRgOM test WHERE \"test\" = \"11354314315135133151353\""
@@ -260,10 +247,10 @@ errorTests connection config =
             (\res ->
                 test "The result should equal the expected value"
                     (\_ ->
-                        Expect.equal res.data Turso.Db.SqlParseError
+                        Expect.equal res Turso.Db.SqlParseError
                     )
             )
-        , await
+        , awaitError
             (Turso.Db.getOne
                 connection
                 { query = "SELECT (test) FROM test WHERE test = :test_param"
@@ -284,10 +271,10 @@ errorTests connection config =
             (\res ->
                 test "The result should equal the expected value"
                     (\_ ->
-                        Expect.equal res.data Turso.Db.SqliteUnknownError
+                        Expect.equal res Turso.Db.SqliteUnknownError
                     )
             )
-        , await
+        , awaitError
             (Turso.Db.getOne
                 connection
                 { query = "SELECT rgerg FROM test WHERE test = :test_param"
@@ -305,10 +292,10 @@ errorTests connection config =
             (\res ->
                 test "The result should equal the expected value"
                     (\_ ->
-                        Expect.equal res.data Turso.Db.SqlInputError
+                        Expect.equal res Turso.Db.SqlInputError
                     )
             )
-        , await
+        , awaitError
             (Turso.Db.getOne
                 connection
                 { query = 
@@ -330,7 +317,7 @@ errorTests connection config =
             (\res ->
                 test "The result should equal the expected value"
                     (\_ ->
-                        Expect.equal res.data Turso.Db.SqlManyStatements
+                        Expect.equal res Turso.Db.SqlManyStatements
                     )
             )
         ]

@@ -500,23 +500,40 @@ or more than one result, it will fail.
                 (Turso.Db.Decode.string "id")
         }
 -}
-getMaybeOne : Connection -> Query a -> Task (HttpClient.Error (Outcome (Maybe a))) (HttpClient.Response (Outcome (Maybe a)))
+getMaybeOne : Connection -> Query a -> Task Error (Result (Maybe a))
 getMaybeOne connection { query, parameters, decoder } =
     let
         statement =
             { statement = query
             , parameters = parameters
             }
+
+        handleError array =
+            array
+                |> Array.first
+                |> Maybe.map Json.Decode.succeed
+                |> Maybe.withDefault 
+                    (Json.Decode.fail "There were no results returned when using a `getMaybeOne` query.")
     in
     internalTransaction connection 
         { prepareDecoder = 
-            Json.Decode.array 
-                >> queryDecoderMaybeOneResult 
-                >> Json.Decode.map Outcome_Success
+            (\dataDecoder -> 
+                Json.Decode.oneOf 
+                    [ dataDecoder
+                        |> Json.Decode.array 
+                        |> queryDecoderMaybeOneResult 
+                        |> Json.Decode.map Outcome_Success
+                    , errorDecoder
+                        |> Json.Decode.andThen handleError
+                    ]
+            )
         , prepareEncoder = statementsEncoder
         , dataDecoder = decoder
         }
         [ statement ]
+        |> Task.mapError removeHttpClientErrorData
+        |> Task.mapError HttpError
+        |> Task.andThen taskFromOutcomeResponse
 
 
 {-| Get all of the resulting rows from a `Query`.
@@ -537,23 +554,40 @@ getMaybeOne connection { query, parameters, decoder } =
                 (Turso.Db.Decode.string "id")
         }
 -}
-getAll : Connection -> Query a -> Task (HttpClient.Error (Outcome (Array a))) (HttpClient.Response (Outcome (Array a)))
+getAll : Connection -> Query a -> Task Error (Result (Array a))
 getAll connection { query, parameters, decoder } =
     let
         statement =
             { statement = query
             , parameters = parameters
             }
+
+        handleError array =
+            array
+                |> Array.first
+                |> Maybe.map Json.Decode.succeed
+                |> Maybe.withDefault 
+                    (Json.Decode.fail "There were no results returned when using a `getMaybeOne` query.")
     in
     internalTransaction connection 
         { prepareDecoder = 
-            Json.Decode.array 
-                >> queryDecoderSingleResult 
-                >> Json.Decode.map Outcome_Success
+            (\dataDecoder ->
+                Json.Decode.oneOf
+                    [ dataDecoder
+                        |> Json.Decode.array 
+                        |> queryDecoderSingleResult 
+                        |> Json.Decode.map Outcome_Success
+                    , errorDecoder
+                        |> Json.Decode.andThen handleError
+                    ]
+            )
         , prepareEncoder = statementsEncoder
         , dataDecoder = decoder
         }
         [ statement ]
+        |> Task.mapError removeHttpClientErrorData
+        |> Task.mapError HttpError
+        |> Task.andThen taskFromOutcomeResponse
 
 
 {-| Execute a single SQL statement.
@@ -566,20 +600,34 @@ getAll connection { query, parameters, decoder } =
             ]
         }
 -}
-execute : Connection -> Statement -> Task (HttpClient.Error (Outcome {})) (HttpClient.Response (Outcome {}))
+execute : Connection -> Statement -> Task Error (Result {})
 execute connection statement =
+    let
+        handleError array =
+            array
+                |> Array.first
+                |> Maybe.map Json.Decode.succeed
+                |> Maybe.withDefault 
+                    (Json.Decode.fail "There were no results returned when using a `getMaybeOne` query.")
+    in
     internalTransaction connection 
         { prepareDecoder = 
-            (\valueDecoder ->
+            (\dataDecoder ->
                 Json.Decode.oneOf
-                    [ queryDecoderSingleResult valueDecoder
+                    [ dataDecoder
+                        |> queryDecoderSingleResult
                         |> Json.Decode.map Outcome_Success
+                    , errorDecoder
+                        |> Json.Decode.andThen handleError
                     ]
             )
         , prepareEncoder = statementsEncoder
         , dataDecoder = Turso.Db.Decode.succeed {}
         }
         [ statement ]
+        |> Task.mapError removeHttpClientErrorData
+        |> Task.mapError HttpError
+        |> Task.andThen taskFromOutcomeResponse
 
 
 {-| Execute an `Array` of sql statements in a single request.
@@ -599,15 +647,29 @@ execute connection statement =
           }
         ]
 -}
-transaction : Connection -> Array Statement ->  Task (HttpClient.Error (Array (Outcome {}))) (HttpClient.Response (Array (Outcome {})))
-transaction connection =
+transaction : Connection -> Array Statement ->  Task Error (Array (Result {}))
+transaction connection statements =
     internalTransaction connection 
         { prepareDecoder = 
-            queryDecoder Json.Decode.succeed 
-                >> Json.Decode.map (Array.map Outcome_Success)
+            (\dataDecoder ->
+                Json.Decode.oneOf
+                    [ dataDecoder
+                        |> queryDecoder Json.Decode.succeed 
+                        |> Json.Decode.map (Array.map Outcome_Success)
+                    , errorDecoder
+                    ]
+            )
         , prepareEncoder = statementsEncoder
         , dataDecoder = Turso.Db.Decode.succeed {}
         }
+        statements
+        |> Task.mapError removeHttpClientErrorData
+        |> Task.mapError HttpError
+        |> Task.andThen (\result ->
+            result.data
+                |> Array.map outcomeToResult 
+                |> Task.sequence
+        )
 
 
 {-| Parameters needed for a generic transaction.
@@ -670,7 +732,13 @@ removeHttpClientErrorData err =
 {-|-}
 taskFromOutcomeResponse : HttpClient.Response (Outcome a) -> Task Error (Result a)
 taskFromOutcomeResponse result =
-    when result.data is
+    outcomeToResult result.data
+
+
+{-|-}
+outcomeToResult : Outcome a -> Task Error (Result a)
+outcomeToResult outcome =
+    when outcome is
         Outcome_Success data ->
             Task.succeed data
 
