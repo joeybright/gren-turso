@@ -25,7 +25,7 @@ SQL to it.
 
 @docs getAll, getOne, getMaybeOne
 
-## Getting Results
+## Handling Results
 
 @docs Error, Result
 -}
@@ -87,7 +87,16 @@ type alias Statement =
     }
 
 
-{-|-}
+{-| The result of a query.
+
+- `baton` is not used in this module, but may be used in the future. It allows making multiple
+requests to Turso on the same connection. This value can be safely ignored.
+- `affectedRowCount` is the number of rows affected by the sent SQL. If you're inserting rows, this
+number should equal the number of rows inserted, for example.
+- `lastInsertRowId` is the internal Turso ID of the last row inserted. This will be `Nothing` if no
+rows were inserted.
+- `data` is the data returned from the database.
+-}
 type alias Result a =
     { baton : Maybe String
     , affectedRowCount : Int
@@ -96,16 +105,18 @@ type alias Result a =
     }
 
 
-{-| Possible errors that happen when making a request to a Turso DB.
+{-| Possible errors that happen when making a request to a Turso DB. This list is not comprehensive
+and other errors may appear. If you encounter an error not handled here, submit a ticket in the
+Github repo!
 
 - `HttpError` captures any HTTP errors.
-- `SqlParseError` captures when the given SQL statement cannot be parsed.
-- `SqlInputError` captures when the given SQL has an error with one of its inputs.
+- `SqlParseError` happens when the given SQL statement cannot be parsed.
+- `SqlInputError` happens when the given SQL has an error with one of its inputs.
 - `SqlManyStatements` captures when the given SQL has more than one statement. The Turso API only 
 allows a single SQL statement in a query.
-- `SqliteUnknownError` captures an unknown error with SQLite
-- `ArgsInvalid` captures any errors involving invalid arguments.
-- `UnknownError` captures any other errors that may happen.
+- `SqliteUnknownError` happens an unknown error with SQLite
+- `ArgsInvalid` happens any errors involving invalid arguments.
+- `UnknownError` happens any other errors that may happen.
 -}
 type Error
     = HttpError (HttpClient.Error {})
