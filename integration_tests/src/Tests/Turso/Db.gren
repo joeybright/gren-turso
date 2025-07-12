@@ -37,6 +37,7 @@ tests connection config =
                 , getAllTests connection config
                 , getMaybeOneTests connection config
                 , getOneTests connection config
+                , errorTests connection config
                 ]
         )
 
@@ -150,7 +151,7 @@ getMaybeOneTests connection config =
                             Turso.Db.Success _ ->
                                 Expect.fail "The function should return the expected value"
 
-                            Turso.Db.Unknown ->
+                            _ ->
                                 Expect.fail "The function should return the expected value"
                     )
             )
@@ -176,7 +177,7 @@ getMaybeOneTests connection config =
                             Turso.Db.Success { data } ->
                                 Expect.equal data Nothing
 
-                            Turso.Db.Unknown ->
+                            _ ->
                                 Expect.fail ""
                     )
             )
@@ -209,7 +210,7 @@ getOneTests connection config =
                             Turso.Db.Success { data } ->
                                 Expect.equal data.test "11354314315135133151353"
 
-                            Turso.Db.Unknown -> 
+                            _ -> 
                                 Expect.fail ""
                     )
             )
@@ -232,6 +233,104 @@ getOneTests connection config =
                 test "The function errors successfully, as expected"
                     (\_ ->
                         Expect.pass
+                    )
+            )
+        ]
+
+
+{-|-}
+errorTests : Turso.Db.Connection -> Configuration -> Test
+errorTests connection config =
+    describe "Tests for queries that should return errors"
+        [ await
+            (Turso.Db.getOne
+                connection
+                { query = "SELECT * FRgOM test WHERE \"test\" = \"11354314315135133151353\""
+                , parameters = []
+                , decoder = 
+                    Turso.Db.Decode.map
+                        (\test ->
+                            { test = test
+                            }
+                        )
+                        (Turso.Db.Decode.string "test")
+                }
+            )
+            "Await selecting one row from the database with incorrect SQL query string"
+            (\res ->
+                test "The result should equal the expected value"
+                    (\_ ->
+                        Expect.equal res.data Turso.Db.SqlParseError
+                    )
+            )
+        , await
+            (Turso.Db.getOne
+                connection
+                { query = "SELECT (test) FROM test WHERE test = :test_param"
+                , parameters = 
+                    [ Turso.Db.Encode.string "test" "no variable in the sql string."
+                    , Turso.Db.Encode.string "another" "_"
+                    ]
+                , decoder = 
+                    Turso.Db.Decode.map
+                        (\test ->
+                            { test = test
+                            }
+                        )
+                        (Turso.Db.Decode.string "test")
+                }
+            )
+            "Await selecting one row from the database with some unknown Sqlite error"
+            (\res ->
+                test "The result should equal the expected value"
+                    (\_ ->
+                        Expect.equal res.data Turso.Db.SqliteUnknownError
+                    )
+            )
+        , await
+            (Turso.Db.getOne
+                connection
+                { query = "SELECT rgerg FROM test WHERE test = :test_param"
+                , parameters = []
+                , decoder = 
+                    Turso.Db.Decode.map
+                        (\test ->
+                            { test = test
+                            }
+                        )
+                        (Turso.Db.Decode.string "test")
+                }
+            )
+            "Await selecting one row from the database with an input error"
+            (\res ->
+                test "The result should equal the expected value"
+                    (\_ ->
+                        Expect.equal res.data Turso.Db.SqlInputError
+                    )
+            )
+        , await
+            (Turso.Db.getOne
+                connection
+                { query = 
+                    """
+                    SELECT rgerg FROM test WHERE test = 123; 
+                    SELECT rgerg FROM test WHERE test = 1234;
+                    """
+                , parameters = []
+                , decoder = 
+                    Turso.Db.Decode.map
+                        (\test ->
+                            { test = test
+                            }
+                        )
+                        (Turso.Db.Decode.string "test")
+                }
+            )
+            "Await selecting one row from the database but include two SQL statements in the query"
+            (\res ->
+                test "The result should equal the expected value"
+                    (\_ ->
+                        Expect.equal res.data Turso.Db.SqlManyStatements
                     )
             )
         ]

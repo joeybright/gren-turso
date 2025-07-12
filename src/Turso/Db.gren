@@ -106,7 +106,17 @@ connection.
 -}
 type Result a
     = Success (Data a)
-    | Unknown
+    | SqlParseError -- Captures problems specifically dealing with the wrong sql string
+    | SqlInputError -- Happens when the inputted SQL has some error
+    | SqlManyStatements -- Happens when a the statement of query string has more than one SQL statement
+    | SqliteUnknownError -- Captures unknown issues with SQLite
+    | ArgsInvalid
+    | Unknown String
+
+
+{-|-}
+type Error a
+    = HttpError (HttpClient.Error a)
 
 
 {-| Construct the Turso API endpoint from a `Connection`.
@@ -277,6 +287,49 @@ queryDecoder mapFunc decoder =
         )
 
 
+{-| Handle decoding know errors from Turso.
+
+Errors taken from here: https://github.com/tursodatabase/libsql/blob/fb5e44239d11df95be3963680cef01c6301285d8/libsql-server/src/hrana/stmt.rs#L263
+and through manual testing. Not all errors are covered at the moment.
+-}
+errorDecoder : Json.Decode.Decoder (Array (Result a))
+errorDecoder =
+    Json.Decode.oneOf
+        [ Json.Decode.field "results"
+            (Json.Decode.array 
+                (Json.Decode.field "type" Json.Decode.string
+                    |> Json.Decode.andThen (\type_ ->
+                        (Json.Decode.field "error"
+                            (Json.Decode.map
+                                (\errorCode ->
+                                    when errorCode is
+                                        "SQL_PARSE_ERROR" ->
+                                            SqlParseError
+
+                                        "SQLITE_UNKNOWN" ->
+                                            SqliteUnknownError
+
+                                        "SQL_INPUT_ERROR" ->
+                                            SqlInputError
+
+                                        "SQL_MANY_STATEMENTS" ->
+                                            SqlManyStatements
+
+                                        "ARGS_INVALID" ->
+                                            ArgsInvalid
+
+                                        string ->
+                                            Unknown ("Unknown error: " ++ string)
+                                )
+                                (Json.Decode.field "code" Json.Decode.string)
+                            )
+                        )
+                    )
+                )
+            )    
+        ]
+
+
 {-| Wraps `queryDecoder` to only succeed decoding when there is at least
 one result.
 
@@ -387,12 +440,26 @@ getOne connection { query, parameters, decoder } =
             { statement = query
             , parameters = parameters
             }
+
+        handleError array =
+            array
+                |> Array.first
+                |> Maybe.map Json.Decode.succeed
+                |> Maybe.withDefault 
+                    (Json.Decode.fail "There were no results returned when using a `getOne` query.")
     in
     internalTransaction connection 
         { prepareDecoder = 
-            Json.Decode.array
-                >> queryDecoderJustOneResult
-                >> Json.Decode.map Success
+            (\dataDecoder -> 
+                Json.Decode.oneOf
+                    [ dataDecoder
+                        |> Json.Decode.array 
+                        |> queryDecoderJustOneResult
+                        |> Json.Decode.map Success
+                    , errorDecoder
+                        |> Json.Decode.andThen handleError
+                    ]
+            )
         , prepareEncoder = statementsEncoder
         , dataDecoder = decoder
         }
@@ -550,7 +617,7 @@ internalTransaction connection { prepareDecoder, prepareEncoder, dataDecoder } s
         |> HttpClient.withJsonBody (prepareEncoder statements) 
         |> HttpClient.expectJson 
             (dataDecoder
-                |> Turso.Db.Decode.unwrap 
+                |> Turso.Db.Decode.unwrap
                 |> prepareDecoder
             )
         |> HttpClient.withHeader "Authorization" ("Bearer " ++ accessToken)
