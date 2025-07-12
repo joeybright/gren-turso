@@ -3,7 +3,7 @@ module Turso.Db exposing
     , execute, transaction
     , getAll, getMaybeOne, getOne
     , Query, Statement
-    , Result(..)
+    , Error(..), Result
     )
 
 {-| Module for configuring access to a specific Turso database and sending
@@ -27,7 +27,7 @@ SQL to it.
 
 ## Getting Results
 
-@docs Result
+@docs Error, Result
 -}
 
 import Task exposing ( Task )
@@ -88,7 +88,7 @@ type alias Statement =
 
 
 {-|-}
-type alias Data a =
+type alias Result a =
     { baton : Maybe String
     , affectedRowCount : Int
     , lastInsertRowId : Maybe String
@@ -96,27 +96,38 @@ type alias Data a =
     }
 
 
-{-| The result of a single query sent to Turso.
+{-| Possible errors that happen when making a request to a Turso DB.
 
-- `baton` is a value that is not used in this module. If supported in the future,
-it'd allow for multiple queries or statements to be run using the same database
-connection.
-- `data` is the data result of running the query. These are captured by the
-`Data a` type in this module.
+- `HttpError` captures any HTTP errors.
+- `SqlParseError` captures when the given SQL statement cannot be parsed.
+- `SqlInputError` captures when the given SQL has an error with one of its inputs.
+- `SqlManyStatements` captures when the given SQL has more than one statement. The Turso API only 
+allows a single SQL statement in a query.
+- `SqliteUnknownError` captures an unknown error with SQLite
+- `ArgsInvalid` captures any errors involving invalid arguments.
+- `UnknownError` captures any other errors that may happen.
 -}
-type Result a
-    = Success (Data a)
+type Error
+    = HttpError (HttpClient.Error {})
     | SqlParseError -- Captures problems specifically dealing with the wrong sql string
     | SqlInputError -- Happens when the inputted SQL has some error
     | SqlManyStatements -- Happens when a the statement of query string has more than one SQL statement
     | SqliteUnknownError -- Captures unknown issues with SQLite
     | ArgsInvalid
-    | Unknown String
+    | UnknownError String
 
 
-{-|-}
-type Error a
-    = HttpError (HttpClient.Error a)
+{-| Known possible outcomes. Meant to be internal to this module, with
+the `Outcome_Success` being separated out into a successful `Task`.
+-}
+type Outcome a
+    = Outcome_Success (Result a)
+    | Outcome_SqlParseError -- Captures problems specifically dealing with the wrong sql string
+    | Outcome_SqlInputError -- Happens when the inputted SQL has some error
+    | Outcome_SqlManyStatements -- Happens when a the statement of query string has more than one SQL statement
+    | Outcome_SqliteUnknownError -- Captures unknown issues with SQLite
+    | Outcome_ArgsInvalid
+    | Outcome_Unknown String
 
 
 {-| Construct the Turso API endpoint from a `Connection`.
@@ -189,7 +200,7 @@ Accepts a function that maps over decoded Data to transform them into whatever v
 is necessary by the calling function. Also accepts a decoder which decodes the variable
 data expected to be returned from the given SQL queries.
 -}
--- queryDecoder : (Array (Data a) -> Json.Decode.Decoder (Data b)) -> Json.Decode.Decoder a -> Json.Decode.Decoder (Data b)
+-- queryDecoder : (Array (Result a) -> Json.Decode.Decoder (Data b)) -> Json.Decode.Decoder a -> Json.Decode.Decoder (Data b)
 queryDecoder mapFunc decoder =
     let
         rowsDecoder =
@@ -292,7 +303,7 @@ queryDecoder mapFunc decoder =
 Errors taken from here: https://github.com/tursodatabase/libsql/blob/fb5e44239d11df95be3963680cef01c6301285d8/libsql-server/src/hrana/stmt.rs#L263
 and through manual testing. Not all errors are covered at the moment.
 -}
-errorDecoder : Json.Decode.Decoder (Array (Result a))
+errorDecoder : Json.Decode.Decoder (Array (Outcome a))
 errorDecoder =
     Json.Decode.oneOf
         [ Json.Decode.field "results"
@@ -304,22 +315,22 @@ errorDecoder =
                                 (\errorCode ->
                                     when errorCode is
                                         "SQL_PARSE_ERROR" ->
-                                            SqlParseError
+                                            Outcome_SqlParseError
 
                                         "SQLITE_UNKNOWN" ->
-                                            SqliteUnknownError
+                                            Outcome_SqliteUnknownError
 
                                         "SQL_INPUT_ERROR" ->
-                                            SqlInputError
+                                            Outcome_SqlInputError
 
                                         "SQL_MANY_STATEMENTS" ->
-                                            SqlManyStatements
+                                            Outcome_SqlManyStatements
 
                                         "ARGS_INVALID" ->
-                                            ArgsInvalid
+                                            Outcome_ArgsInvalid
 
                                         string ->
-                                            Unknown ("Unknown error: " ++ string)
+                                            Outcome_Unknown ("Unknown error: " ++ string)
                                 )
                                 (Json.Decode.field "code" Json.Decode.string)
                             )
@@ -336,7 +347,7 @@ one result.
 This only cares if there is a single query result; should always succeed
 as long as the query has a single statement.
 -}
-queryDecoderSingleResult : Json.Decode.Decoder a -> Json.Decode.Decoder (Data a)
+queryDecoderSingleResult : Json.Decode.Decoder a -> Json.Decode.Decoder (Result a)
 queryDecoderSingleResult =
     let
         func resultingArray =
@@ -353,7 +364,7 @@ queryDecoderSingleResult =
 {-| Wraps `queryDecoder` to only succeed decoding when there is a single 
 result.
 -}
-queryDecoderJustOneResult : Json.Decode.Decoder (Array a) -> Json.Decode.Decoder (Data a)
+queryDecoderJustOneResult : Json.Decode.Decoder (Array a) -> Json.Decode.Decoder (Result a)
 queryDecoderJustOneResult =
     let
         func resultingArray =
@@ -386,7 +397,7 @@ result, but succeed with `Nothing` if there is not.
 
 This will still fail decoding if there is not any results returned.
 -}
-queryDecoderMaybeOneResult : Json.Decode.Decoder (Array a) -> Json.Decode.Decoder (Data (Maybe a))
+queryDecoderMaybeOneResult : Json.Decode.Decoder (Array a) -> Json.Decode.Decoder (Result (Maybe a))
 queryDecoderMaybeOneResult =
     let
         resultRecord result data =
@@ -433,7 +444,7 @@ or more than one result, it will fail.
                 (Turso.Db.Decode.string "name")
         }
 -}
-getOne : Connection -> Query a -> Task (HttpClient.Error (Result a)) (HttpClient.Response (Result a))
+getOne : Connection -> Query a -> Task Error (Result a)
 getOne connection { query, parameters, decoder } =
     let
         statement =
@@ -455,7 +466,7 @@ getOne connection { query, parameters, decoder } =
                     [ dataDecoder
                         |> Json.Decode.array 
                         |> queryDecoderJustOneResult
-                        |> Json.Decode.map Success
+                        |> Json.Decode.map Outcome_Success
                     , errorDecoder
                         |> Json.Decode.andThen handleError
                     ]
@@ -464,6 +475,9 @@ getOne connection { query, parameters, decoder } =
         , dataDecoder = decoder
         }
         [ statement ]
+        |> Task.mapError removeHttpClientErrorData
+        |> Task.mapError HttpError
+        |> Task.andThen taskFromOutcomeResponse
 
 
 {-| Run a query that should have zero or one results. If this query returns zero
@@ -486,7 +500,7 @@ or more than one result, it will fail.
                 (Turso.Db.Decode.string "id")
         }
 -}
-getMaybeOne : Connection -> Query a -> Task (HttpClient.Error (Result (Maybe a))) (HttpClient.Response (Result (Maybe a)))
+getMaybeOne : Connection -> Query a -> Task (HttpClient.Error (Outcome (Maybe a))) (HttpClient.Response (Outcome (Maybe a)))
 getMaybeOne connection { query, parameters, decoder } =
     let
         statement =
@@ -498,7 +512,7 @@ getMaybeOne connection { query, parameters, decoder } =
         { prepareDecoder = 
             Json.Decode.array 
                 >> queryDecoderMaybeOneResult 
-                >> Json.Decode.map Success
+                >> Json.Decode.map Outcome_Success
         , prepareEncoder = statementsEncoder
         , dataDecoder = decoder
         }
@@ -523,7 +537,7 @@ getMaybeOne connection { query, parameters, decoder } =
                 (Turso.Db.Decode.string "id")
         }
 -}
-getAll : Connection -> Query a -> Task (HttpClient.Error (Result (Array a))) (HttpClient.Response (Result (Array a)))
+getAll : Connection -> Query a -> Task (HttpClient.Error (Outcome (Array a))) (HttpClient.Response (Outcome (Array a)))
 getAll connection { query, parameters, decoder } =
     let
         statement =
@@ -535,7 +549,7 @@ getAll connection { query, parameters, decoder } =
         { prepareDecoder = 
             Json.Decode.array 
                 >> queryDecoderSingleResult 
-                >> Json.Decode.map Success
+                >> Json.Decode.map Outcome_Success
         , prepareEncoder = statementsEncoder
         , dataDecoder = decoder
         }
@@ -552,14 +566,14 @@ getAll connection { query, parameters, decoder } =
             ]
         }
 -}
-execute : Connection -> Statement -> Task (HttpClient.Error (Result {})) (HttpClient.Response (Result {}))
+execute : Connection -> Statement -> Task (HttpClient.Error (Outcome {})) (HttpClient.Response (Outcome {}))
 execute connection statement =
     internalTransaction connection 
         { prepareDecoder = 
             (\valueDecoder ->
                 Json.Decode.oneOf
                     [ queryDecoderSingleResult valueDecoder
-                        |> Json.Decode.map Success
+                        |> Json.Decode.map Outcome_Success
                     ]
             )
         , prepareEncoder = statementsEncoder
@@ -585,12 +599,12 @@ execute connection statement =
           }
         ]
 -}
-transaction : Connection -> Array Statement ->  Task (HttpClient.Error (Array (Result {}))) (HttpClient.Response (Array (Result {})))
+transaction : Connection -> Array Statement ->  Task (HttpClient.Error (Array (Outcome {}))) (HttpClient.Response (Array (Outcome {})))
 transaction connection =
     internalTransaction connection 
         { prepareDecoder = 
             queryDecoder Json.Decode.succeed 
-                >> Json.Decode.map (Array.map Success)
+                >> Json.Decode.map (Array.map Outcome_Success)
         , prepareEncoder = statementsEncoder
         , dataDecoder = Turso.Db.Decode.succeed {}
         }
@@ -622,3 +636,58 @@ internalTransaction connection { prepareDecoder, prepareEncoder, dataDecoder } s
             )
         |> HttpClient.withHeader "Authorization" ("Bearer " ++ accessToken)
         |> HttpClient.send httpPermission
+
+
+{-| Remove the body of an HttpClient.Error and replace with `{}`.
+-}
+removeHttpClientErrorData : HttpClient.Error a -> HttpClient.Error {}
+removeHttpClientErrorData err =
+    when err is
+        HttpClient.BadStatus { statusCode, statusText, headers } ->
+            HttpClient.BadStatus
+                { statusCode = statusCode
+                , statusText = statusText
+                , headers = headers
+                , data = {}
+                }
+
+        HttpClient.BadUrl string ->
+            HttpClient.BadUrl string
+        
+        HttpClient.BadHeaders ->
+            HttpClient.BadHeaders
+
+        HttpClient.UnexpectedResponseBody string ->
+            HttpClient.UnexpectedResponseBody string
+
+        HttpClient.Timeout ->
+            HttpClient.Timeout
+
+        HttpClient.UnknownError string ->
+            HttpClient.UnknownError string
+
+
+{-|-}
+taskFromOutcomeResponse : HttpClient.Response (Outcome a) -> Task Error (Result a)
+taskFromOutcomeResponse result =
+    when result.data is
+        Outcome_Success data ->
+            Task.succeed data
+
+        Outcome_SqlParseError ->
+            Task.fail SqlParseError
+
+        Outcome_SqlInputError ->
+            Task.fail SqlInputError
+
+        Outcome_SqlManyStatements ->
+            Task.fail SqlManyStatements
+
+        Outcome_SqliteUnknownError ->
+            Task.fail SqliteUnknownError
+
+        Outcome_ArgsInvalid ->
+            Task.fail ArgsInvalid
+
+        _ ->
+            Task.fail (UnknownError "Unknown error")
