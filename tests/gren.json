@@ -7,14 +7,14 @@
     "gren-version": "0.5.3",
     "dependencies": {
         "direct": {
-            "gren-lang/core": "6.0.1",
-            "gren-lang/node": "5.0.4",
-            "gren-lang/test": "4.1.0",
+            "gren-lang/core": "7.0.0",
+            "gren-lang/node": "6.0.0",
+            "gren-lang/test": "5.0.0",
             "gren-lang/test-runner-node": "6.0.0",
             "joeybright/gren-turso": "local:../"
         },
         "indirect": {
-            "gren-lang/url": "5.0.0"
+            "gren-lang/url": "6.0.0"
         }
     }
 }

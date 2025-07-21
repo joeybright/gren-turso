@@ -172,7 +172,7 @@ does not exist.
 -}
 type ListError
     = ListErrorGroupNotFound
-    | ListHttpError (HttpClient.Error (Array Database))
+    | ListHttpError HttpClient.Error
 
 
 {-|-}
@@ -259,7 +259,7 @@ database for does not exist in the organization.
 type CreateError
     = CreateErrorDatabaseAlreadyExists
     | CreateErrorGroupNotFound
-    | CreateHttpError (HttpClient.Error CreateResult)
+    | CreateHttpError HttpClient.Error
 
 
 {-|-}
@@ -330,7 +330,7 @@ not exist in Turso.
 -}
 type RetrieveError
     = RetrieveErrorDatabaseNotFound
-    | RetrieveHttpError (HttpClient.Error Database)
+    | RetrieveHttpError HttpClient.Error
 
 
 {-|-}
@@ -444,7 +444,7 @@ does not exist yet in Turso.
 type UsageError
     = UsageErrorInvalidQueryParameter
     | UsageErrorDatabaseNotFound
-    | UsageHttpError (HttpClient.Error UsageResult)
+    | UsageHttpError HttpClient.Error
 
 
 {-|-}
@@ -560,7 +560,7 @@ does not exist in Turso.
 -}
 type StatsError
     = StatsErrorDatabaseNotFound
-    | StatsHttpError (HttpClient.Error StatsResult)
+    | StatsHttpError HttpClient.Error
 
 
 {-|-}
@@ -646,7 +646,7 @@ not exist yet in Turso.
 -}
 type DeleteError
     = DeleteErrorDatabaseNotFound
-    | DeleteHttpError (HttpClient.Error DeleteResult)
+    | DeleteHttpError HttpClient.Error
 
 
 {-|-}
@@ -797,7 +797,7 @@ createTokenResultDecoder =
 
 {-| Create a token for operating on a database in Turso.
 -}
-createToken : Turso.Platform.Connection -> CreateTokenArgs -> Task (HttpClient.Error CreateTokenResult) (HttpClient.Response CreateTokenResult)
+createToken : Turso.Platform.Connection -> CreateTokenArgs -> Task HttpClient.Error (HttpClient.Response CreateTokenResult)
 createToken { httpPermission, accessToken, organizationSlug } params =
     let
         { databaseName, expiration, authorization } =
@@ -832,7 +832,7 @@ not exist yet in Turso.
 -}
 type InvalidateTokensError
     = InvalidateTokensErrorDatabaseNotFound
-    | InvalidateTokensHttpError (HttpClient.Error {})
+    | InvalidateTokensHttpError HttpClient.Error
 
 
 {-| Arguments needed to invalidate all tokens for a database.

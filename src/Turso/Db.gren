@@ -119,7 +119,7 @@ allows a single SQL statement in a query.
 - `UnknownError` happens any other errors that may happen.
 -}
 type Error
-    = HttpError (HttpClient.Error {})
+    = HttpError HttpClient.Error
     | SqlParseError -- Captures problems specifically dealing with the wrong sql string
     | SqlInputError -- Happens when the inputted SQL has some error
     | SqlManyStatements -- Happens when a the statement of query string has more than one SQL statement
@@ -486,7 +486,6 @@ getOne connection { query, parameters, decoder } =
         , dataDecoder = decoder
         }
         [ statement ]
-        |> Task.mapError removeHttpClientErrorData
         |> Task.mapError HttpError
         |> Task.andThen taskFromOutcomeResponse
 
@@ -542,7 +541,6 @@ getMaybeOne connection { query, parameters, decoder } =
         , dataDecoder = decoder
         }
         [ statement ]
-        |> Task.mapError removeHttpClientErrorData
         |> Task.mapError HttpError
         |> Task.andThen taskFromOutcomeResponse
 
@@ -596,7 +594,6 @@ getAll connection { query, parameters, decoder } =
         , dataDecoder = decoder
         }
         [ statement ]
-        |> Task.mapError removeHttpClientErrorData
         |> Task.mapError HttpError
         |> Task.andThen taskFromOutcomeResponse
 
@@ -636,7 +633,6 @@ execute connection statement =
         , dataDecoder = Turso.Db.Decode.succeed {}
         }
         [ statement ]
-        |> Task.mapError removeHttpClientErrorData
         |> Task.mapError HttpError
         |> Task.andThen taskFromOutcomeResponse
 
@@ -674,7 +670,6 @@ transaction connection statements =
         , dataDecoder = Turso.Db.Decode.succeed {}
         }
         statements
-        |> Task.mapError removeHttpClientErrorData
         |> Task.mapError HttpError
         |> Task.andThen (\result ->
             result.data
@@ -700,7 +695,7 @@ type alias TransactionParams a b =
 
 
 {-|-}
-internalTransaction : Connection -> TransactionParams a b -> Array Statement ->  Task (HttpClient.Error b) (HttpClient.Response b)
+internalTransaction : Connection -> TransactionParams a b -> Array Statement ->  Task HttpClient.Error (HttpClient.Response b)
 internalTransaction connection { prepareDecoder, prepareEncoder, dataDecoder } statements =
     let
         { accessToken, httpPermission } =
@@ -716,35 +711,6 @@ internalTransaction connection { prepareDecoder, prepareEncoder, dataDecoder } s
             )
         |> HttpClient.withHeader "Authorization" ("Bearer " ++ accessToken)
         |> HttpClient.send httpPermission
-
-
-{-| Remove the body of an HttpClient.Error and replace with `{}`.
--}
-removeHttpClientErrorData : HttpClient.Error a -> HttpClient.Error {}
-removeHttpClientErrorData err =
-    when err is
-        HttpClient.BadStatus { statusCode, statusText, headers } ->
-            HttpClient.BadStatus
-                { statusCode = statusCode
-                , statusText = statusText
-                , headers = headers
-                , data = {}
-                }
-
-        HttpClient.BadUrl string ->
-            HttpClient.BadUrl string
-        
-        HttpClient.BadHeaders ->
-            HttpClient.BadHeaders
-
-        HttpClient.UnexpectedResponseBody string ->
-            HttpClient.UnexpectedResponseBody string
-
-        HttpClient.Timeout ->
-            HttpClient.Timeout
-
-        HttpClient.UnknownError string ->
-            HttpClient.UnknownError string
 
 
 {-|-}
