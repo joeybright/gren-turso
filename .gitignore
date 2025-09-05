@@ -3,3 +3,4 @@
 app
 *.js
 .DS_STORE
+.devbox
