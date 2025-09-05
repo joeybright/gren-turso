@@ -86,7 +86,7 @@ listDecoder =
 {-| List all groups in Turso for the organization specified in the 
 `Turso.Db.Connection`.
 -}
-list : Turso.Platform.Connection -> Task (HttpClient.Error (Array Group)) (HttpClient.Response (Array Group))
+list : Turso.Platform.Connection -> Task HttpClient.Error (HttpClient.Response (Array Group))
 list { httpPermission, accessToken, organizationSlug } =
     let
         url =
@@ -130,7 +130,7 @@ type alias RetrieveArgs =
 -}
 type RetrieveError
     = RetrieveErrorGroupNotFound
-    | RetrieveHttpError (HttpClient.Error Group)
+    | RetrieveHttpError HttpClient.Error
 
 
 {-|-}
@@ -193,7 +193,7 @@ type alias RetrieveConfigurationResult =
 -}
 type RetrieveConfigurationError
     = RetrieveConfigurationErrorGroupNotFound
-    | RetrieveConfigurationHttpError (HttpClient.Error RetrieveConfigurationResult)
+    | RetrieveConfigurationHttpError HttpClient.Error
 
 
 {-|-}

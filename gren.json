@@ -4,7 +4,7 @@
     "name": "joeybright/gren-turso",
     "summary": "Interact with the Turso Platform API and libSQL remote protocol (over HTTP)",
     "license": "BSD-3-Clause",
-    "version": "2.0.0",
+    "version": "3.0.0",
     "exposed-modules": [
         "Turso.Db",
         "Turso.Db.Encode",
@@ -14,10 +14,10 @@
         "Turso.Platform.Groups",
         "Turso.Platform.Tokens"
     ],
-    "gren-version": "0.5.0 <= v < 0.6.0",
+    "gren-version": "0.6.0 <= v < 0.7.0",
     "dependencies": {
-        "gren-lang/core": "6.0.0 <= v < 7.0.0",
-        "gren-lang/node": "5.0.0 <= v < 6.0.0",
-        "gren-lang/url": "5.0.0 <= v < 6.0.0"
+        "gren-lang/core": "7.0.0 <= v < 8.0.0",
+        "gren-lang/node": "6.0.0 <= v < 7.0.0",
+        "gren-lang/url": "6.0.0 <= v < 7.0.0"
     }
 }

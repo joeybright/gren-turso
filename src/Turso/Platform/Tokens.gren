@@ -81,7 +81,7 @@ type alias CreateArgs =
 
 The resulting token should not be saved unsafely or shared publicly.
 -}
-create : CreateArgs -> Task (HttpClient.Error CreateResult) (HttpClient.Response CreateResult)
+create : CreateArgs -> Task HttpClient.Error (HttpClient.Response CreateResult)
 create { permission, token, createdTokenName } =
     HttpClient.post ("https://api.turso.tech/v1/auth/api-tokens/" ++ createdTokenName)
         |> HttpClient.withHeader "Authorization" ("Bearer " ++ token)
@@ -123,7 +123,7 @@ type alias ValidateArgs =
 
 {-| Validate an API token beloning to a user.
 -}
-validate : ValidateArgs -> Task (HttpClient.Error ValidateResult) (HttpClient.Response ValidateResult)
+validate : ValidateArgs -> Task HttpClient.Error (HttpClient.Response ValidateResult)
 validate { permission, token } =
     HttpClient.get ("https://api.turso.tech/v1/auth/validate")
         |> HttpClient.withHeader "Authorization" ("Bearer " ++ token)
@@ -181,7 +181,7 @@ type alias ListArgs =
 
 {-| List all Turso platform API tokens belonging to the user.
 -}
-list : ListArgs -> Task (HttpClient.Error ListResult) (HttpClient.Response ListResult)
+list : ListArgs -> Task HttpClient.Error (HttpClient.Response ListResult)
 list { permission, token } =
     HttpClient.get ("https://api.turso.tech/v1/auth/api-tokens")
         |> HttpClient.withHeader "Authorization" ("Bearer " ++ token)
@@ -225,7 +225,7 @@ type alias RevokeArgs =
 
 {-| Revoke a token.
 -}
-revoke : RevokeArgs -> Task (HttpClient.Error RevokeResult) (HttpClient.Response RevokeResult)
+revoke : RevokeArgs -> Task HttpClient.Error (HttpClient.Response RevokeResult)
 revoke { permission, tokenNameToRevoke, token} =
     HttpClient.request HttpServer.DELETE ("https://api.turso.tech/v1/auth/api-tokens/" ++ tokenNameToRevoke)
         |> HttpClient.withHeader "Authorization" ("Bearer " ++ token)
